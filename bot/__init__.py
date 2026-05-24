@@ -77,6 +77,12 @@ var_list = [
     "UPSTREAM_REPO",
     "UPSTREAM_BRANCH",
     "UPDATE_PKGS",
+    "AUTO_THUMBNAIL",
+    "TMDB_ACCESS_TOKEN",
+    "AUTORENAME",
+    "RENAME_METHOD",
+    "LEECH_FILENAME_REMNAME_AUTO",
+    "LEECH_FILENAME_REMNAME_REGEX",
 ]
 auth_chats = {}
 excluded_extensions = ["aria2", "!qB"]

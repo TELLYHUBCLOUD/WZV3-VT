@@ -737,6 +737,12 @@ class TaskConfig:
             [part.strip() for part in split(item) if part.strip()]
             for item in self.ffmpeg_cmds
         ]
+        # Codec flags that specify encoding
+        _CODEC_FLAGS = {
+            "-c", "-c:v", "-c:a", "-c:s",
+            "-vcodec", "-acodec", "-scodec", "-codec",
+            "-codec:v", "-codec:a", "-codec:s",
+        }
         try:
             ffmpeg = FFMpeg(self)
             for ffmpeg_cmd in cmds:
@@ -752,6 +758,25 @@ class TaskConfig:
                     "-progress",
                     "pipe:1",
                 ] + ffmpeg_cmd
+
+                # Block encoding: only allow -c copy variants
+                has_encoding = False
+                for i, arg in enumerate(cmd):
+                    if arg in _CODEC_FLAGS and i + 1 < len(cmd):
+                        codec_val = cmd[i + 1].lower()
+                        if codec_val != "copy":
+                            has_encoding = True
+                            LOGGER.warning(
+                                f"Blocked FFmpeg encoding codec: "
+                                f"{arg} {cmd[i + 1]}"
+                            )
+                            break
+                if has_encoding:
+                    LOGGER.info(
+                        "Skipping FFmpeg cmd: encoding not allowed, "
+                        "only -c copy is permitted"
+                    )
+                    continue
                 if "-del" in cmd:
                     cmd.remove("-del")
                     delete_files = True

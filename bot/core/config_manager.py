@@ -5,6 +5,8 @@ from os import getenv
 class Config:
     AS_DOCUMENT = False
     AUTHORIZED_CHATS = ""
+    AUTO_THUMBNAIL = False
+    AUTORENAME = True
     BASE_URL = ""
     BASE_URL_PORT = 80
     BOT_TOKEN = ""
@@ -68,6 +70,8 @@ class Config:
     LEECH_PREFIX = ""
     LEECH_CAPTION = ""
     LEECH_SUFFIX = ""
+    LEECH_FILENAME_REMNAME_AUTO = ""
+    LEECH_FILENAME_REMNAME_REGEX = ""
     LEECH_FONT = ""
     LEECH_SPLIT_SIZE = 2097152000
     MEDIA_GROUP = False
@@ -82,6 +86,7 @@ class Config:
     QUEUE_UPLOAD = 0
     RCLONE_FLAGS = ""
     RCLONE_PATH = ""
+    RENAME_METHOD = "auto"
     RCLONE_SERVE_URL = ""
     SHOW_CLOUD_LINK = True
     RCLONE_SERVE_USER = ""
@@ -102,6 +107,7 @@ class Config:
     TELEGRAM_API = 0
     TELEGRAM_HASH = ""
     TG_PROXY = None
+    TMDB_ACCESS_TOKEN = ""
     THUMBNAIL_LAYOUT = ""
     VERIFY_TIMEOUT = 0
     LOGIN_PASS = ""

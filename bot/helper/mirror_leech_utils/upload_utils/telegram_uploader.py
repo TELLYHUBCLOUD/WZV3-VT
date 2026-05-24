@@ -38,8 +38,12 @@ from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 from ...telegram_helper.message_utils import send_message
 from ...ext_utils.media_utils import (
+    apply_regex_rename,
+    apply_template_rename,
+    download_image_thumb,
     get_audio_thumbnail,
     get_document_type,
+    get_final_poster_url,
     get_media_info,
     get_multiple_frames_thumbnail,
     get_video_thumbnail,
@@ -172,6 +176,40 @@ class TelegramUploader:
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
+
+        # AutoRename logic: apply before prefix/suffix
+        autorename_enabled = (
+            self._listener.user_dict.get("AUTORENAME")
+            if "AUTORENAME" in self._listener.user_dict
+            else Config.AUTORENAME
+        )
+        rename_method = (
+            self._listener.user_dict.get("RENAME_METHOD")
+            or Config.RENAME_METHOD
+        )
+
+        if autorename_enabled:
+            try:
+                if rename_method == "auto":
+                    template = (
+                        self._listener.user_dict.get("lremname_auto")
+                        or Config.LEECH_FILENAME_REMNAME_AUTO
+                    )
+                    if template:
+                        file_ = await apply_template_rename(
+                            file_, template, self._up_path
+                        )
+                        cap_file_ = file_
+                elif rename_method == "regex":
+                    pattern = (
+                        self._listener.user_dict.get("lremname_regex")
+                        or Config.LEECH_FILENAME_REMNAME_REGEX
+                    )
+                    if pattern:
+                        file_ = apply_regex_rename(file_, pattern)
+                        cap_file_ = file_
+            except Exception as e:
+                LOGGER.warning(f"AutoRename failed for {pre_file_}: {e}")
 
         if self._lprefix:
             cap_file_ = self._lprefix.replace(r"\s", " ") + file_
@@ -484,6 +522,31 @@ class TelegramUploader:
                 elif is_audio and not is_video:
                     thumb = await get_audio_thumbnail(self._up_path)
 
+            # TMDb Auto-Thumbnail: fetch poster if still no thumb
+            if not is_image and thumb is None:
+                auto_thumb_enabled = (
+                    self._listener.user_dict.get("AUTO_THUMBNAIL")
+                    if "AUTO_THUMBNAIL" in self._listener.user_dict
+                    else Config.AUTO_THUMBNAIL
+                )
+                if auto_thumb_enabled:
+                    try:
+                        as_doc = self._listener.as_doc
+                        custom_name = getattr(self._listener, "custom_name", "")
+                        rename_regex = (
+                            self._listener.user_dict.get("lremname_regex")
+                            or Config.LEECH_FILENAME_REMNAME_REGEX
+                        )
+                        poster_url = await get_final_poster_url(
+                            custom_name or file, as_doc, rename_regex
+                        )
+                        if poster_url:
+                            tmdb_thumb = await download_image_thumb(poster_url)
+                            if tmdb_thumb:
+                                thumb = tmdb_thumb
+                    except Exception as e:
+                        LOGGER.warning(f"Auto-thumbnail failed: {e}")
+
             if (
                 self._listener.as_doc
                 or force_document
@@ -535,6 +598,7 @@ class TelegramUploader:
                     width=width,
                     height=height,
                     thumb=thumb,
+                    cover=thumb,
                     supports_streaming=True,
                     disable_notification=True,
                     progress=self._upload_progress,

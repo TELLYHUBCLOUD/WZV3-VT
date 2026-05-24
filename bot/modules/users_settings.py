@@ -42,6 +42,8 @@ leech_options = [
     "LEECH_SUFFIX",
     "LEECH_CAPTION",
     "THUMBNAIL_LAYOUT",
+    "lremname_auto",
+    "lremname_regex",
 ]
 uphoster_options = [
     "GOFILE_TOKEN",
@@ -287,6 +289,16 @@ Here I will explain how to use mltb.* which is reference to files you want to wo
         "PixelDrain API Key",
         "<i>Send your PixelDrain API Key.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
     ),
+    "lremname_auto": (
+        "AutoRename Template",
+        "AutoRename Template uses tags to automatically rename files based on metadata like title, season, episode, quality.",
+        "Send AutoRename Template.\n<b>Tags:</b> <code>{title} {season} {episode} {quality} {chapter}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>{title} S{season}E{episode} {quality}</code>\n<b>Timeout:</b> 60 sec",
+    ),
+    "lremname_regex": (
+        "Regex Remname",
+        "Regex Remname uses regex patterns to find and replace parts of filenames.",
+        "Send Regex Remname.\n<b>Format:</b> <code>|pattern:replacement|pattern2:replacement2</code>\n<b>Timeout:</b> 60 sec",
+    ),
 }
 
 
@@ -506,6 +518,61 @@ async def get_user_settings(from_user, stype="main"):
         else:
             thumb_layout = "None"
 
+        # Auto Thumbnail toggle
+        if (
+            user_dict.get("AUTO_THUMBNAIL", False)
+            or "AUTO_THUMBNAIL" not in user_dict
+            and Config.AUTO_THUMBNAIL
+        ):
+            buttons.data_button(
+                "Disable Auto Thumbnail", f"userset {user_id} tog AUTO_THUMBNAIL f"
+            )
+            auto_thumb = "Enabled"
+        else:
+            buttons.data_button(
+                "Enable Auto Thumbnail", f"userset {user_id} tog AUTO_THUMBNAIL t"
+            )
+            auto_thumb = "Disabled"
+
+        # AutoRename toggle
+        if (
+            user_dict.get("AUTORENAME", False)
+            or "AUTORENAME" not in user_dict
+            and Config.AUTORENAME
+        ):
+            buttons.data_button(
+                "Disable AutoRename", f"userset {user_id} tog AUTORENAME f"
+            )
+            autorename_status = "Enabled"
+        else:
+            buttons.data_button(
+                "Enable AutoRename", f"userset {user_id} tog AUTORENAME t"
+            )
+            autorename_status = "Disabled"
+
+        # Rename Method toggle
+        rename_method = user_dict.get("RENAME_METHOD") or Config.RENAME_METHOD
+        if rename_method == "auto":
+            buttons.data_button(
+                "Switch to Regex", f"userset {user_id} tog RENAME_METHOD regex"
+            )
+        else:
+            buttons.data_button(
+                "Switch to Auto", f"userset {user_id} tog RENAME_METHOD auto"
+            )
+
+        # AutoRename Template
+        buttons.data_button(
+            "AutoRename Template", f"userset {user_id} menu lremname_auto"
+        )
+        lremname_auto = user_dict.get("lremname_auto") or Config.LEECH_FILENAME_REMNAME_AUTO or "Not Set"
+
+        # Regex Remname
+        buttons.data_button(
+            "Regex Remname", f"userset {user_id} menu lremname_regex"
+        )
+        lremname_regex = user_dict.get("lremname_regex") or Config.LEECH_FILENAME_REMNAME_REGEX or "Not Set"
+
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(2)
@@ -524,7 +591,12 @@ async def get_user_settings(from_user, stype="main"):
 ┠ Leech Destination → <code>{leech_dest}</code>
 ┠ Leech by <b>{leech_method}</b> session
 ┠ Mixed Leech → <b>{hybrid_leech}</b>
-┖ Thumbnail Layout → <b>{thumb_layout}</b>
+┠ Thumbnail Layout → <b>{thumb_layout}</b>
+┠ Auto Thumbnail → <b>{auto_thumb}</b>
+┠ AutoRename → <b>{autorename_status}</b>
+┠ Rename Method → <b>{rename_method}</b>
+┠ AutoRename Template → <code>{escape(lremname_auto)}</code>
+┖ Regex Remname → <code>{escape(lremname_regex)}</code>
 """
 
     elif stype == "uphoster":
@@ -1321,7 +1393,10 @@ async def edit_user_settings(client, query):
         await get_menu(data[3], message, user_id)
     elif data[2] == "tog":
         await query.answer()
-        update_user_ldata(user_id, data[3], data[4] == "t")
+        if data[3] == "RENAME_METHOD":
+            update_user_ldata(user_id, data[3], data[4])
+        else:
+            update_user_ldata(user_id, data[3], data[4] == "t")
         if data[3] == "STOP_DUPLICATE":
             back_to = "gdrive"
         elif data[3] in ["USER_TOKENS", "USE_DEFAULT_COOKIE"]:

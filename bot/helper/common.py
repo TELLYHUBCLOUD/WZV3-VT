@@ -128,6 +128,7 @@ class TaskConfig:
         self.force_run = False
         self.force_download = False
         self.force_upload = False
+        self.video_tool = False
         self.is_torrent = False
         self.as_med = False
         self.as_doc = False

@@ -322,6 +322,11 @@ def add_handlers():
     )
     TgClient.bot.add_handler(CallbackQueryHandler(stats_pages, filters=regex("^stats")))
     TgClient.bot.add_handler(CallbackQueryHandler(log_cb, filters=regex("^log")))
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(
+            video_tools_callback, filters=regex("^vt_") & CustomFilters.authorized
+        )
+    )
     TgClient.bot.add_handler(CallbackQueryHandler(start_cb, filters=regex("^start")))
     TgClient.bot.add_handler(
         MessageHandler(

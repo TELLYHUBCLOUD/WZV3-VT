@@ -3,7 +3,7 @@ from time import time
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .. import LOGGER
-from ..helper.video_utils.video_tools import get_vt_event
+from ..helper.video_utils.video_tools import get_vt_event, get_vt_state
 
 
 async def render_video_tools_main(vt_msg, state):
@@ -151,36 +151,13 @@ async def video_tools_callback(_, query):
         await query.answer(f"Bad callback: {e}", show_alert=True)
         return
 
-    # Find the listener with this task_id
-    from .. import task_dict, task_dict_lock
-
-    listener = None
-    async with task_dict_lock:
-        for mid, tsk in task_dict.items():
-            if str(mid) == task_id and hasattr(tsk, "listener"):
-                listener = tsk.listener()
-                break
-
-    # Fallback: try to get state from the event system
     event = get_vt_event(task_id)
 
     if event is None:
         await query.answer("Session expired or already processed!", show_alert=True)
         return
 
-    # Get state from listener
-    state = None
-    async with task_dict_lock:
-        for mid, tsk in task_dict.items():
-            if str(mid) == task_id:
-                actual_listener = getattr(tsk, "_listener", None) or getattr(
-                    tsk, "listener", None
-                )
-                if actual_listener and callable(actual_listener):
-                    actual_listener = actual_listener()
-                if actual_listener and hasattr(actual_listener, "_vt_state"):
-                    state = actual_listener._vt_state
-                break
+    state = get_vt_state(task_id)
 
     if state is None:
         await query.answer("Session state not found!", show_alert=True)

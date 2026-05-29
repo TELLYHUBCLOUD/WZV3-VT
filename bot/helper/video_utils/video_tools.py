@@ -26,7 +26,13 @@ _active_vt_sessions = {}
 
 
 def get_vt_event(task_id):
-    return _active_vt_sessions.get(task_id)
+    session = _active_vt_sessions.get(task_id)
+    return session["event"] if session else None
+
+
+def get_vt_state(task_id):
+    session = _active_vt_sessions.get(task_id)
+    return session["state"] if session else None
 
 
 async def probe_streams(file_path):
@@ -147,7 +153,11 @@ async def process_video_tool(listener, up_path):
 
     # Create an event that the callback handler will set
     done_event = Event()
-    _active_vt_sessions[task_id] = done_event
+    _active_vt_sessions[task_id] = {
+        "event": done_event,
+        "state": state,
+        "listener": listener,
+    }
 
     try:
         # Render the UI
@@ -412,7 +422,11 @@ async def pre_probe_and_show_ui(listener, file_, reply_to):
         listener._vt_processed = True
 
         done_event = Event()
-        _active_vt_sessions[task_id] = done_event
+        _active_vt_sessions[task_id] = {
+            "event": done_event,
+            "state": state,
+            "listener": listener,
+        }
 
         try:
             from ...modules.video_tool_ui import render_video_tools_main

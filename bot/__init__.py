@@ -4,9 +4,14 @@ from uvloop import install
 
 install()
 
+from asyncio import new_event_loop, set_event_loop
+
+bot_loop = new_event_loop()
+set_event_loop(bot_loop)
+
 from subprocess import run as srun
 from os import getcwd
-from asyncio import Lock, new_event_loop, set_event_loop
+from asyncio import Lock
 from logging import (
     ERROR,
     INFO,

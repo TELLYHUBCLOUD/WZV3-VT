@@ -413,6 +413,10 @@ class Mirror(TaskListener):
                     await delete_links(self.message)
                     return
 
+        if self.video_tool:
+            from ..helper.video_utils.video_tools import pre_probe_and_show_ui
+            await pre_probe_and_show_ui(self, file_, reply_to)
+
         await delete_links(self.message)
 
         if file_ is not None:

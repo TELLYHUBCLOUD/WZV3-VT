@@ -3,11 +3,13 @@ from asyncio import Event, create_subprocess_exec, sleep, wait_for
 from asyncio.subprocess import PIPE
 from os import path as ospath
 
+from aiofiles import open as aiopen
 from aiofiles.os import makedirs, path as aiopath, remove
 
-from ... import LOGGER, cores
+from ... import LOGGER, cores, DOWNLOAD_DIR
 from ...core.config_manager import BinConfig
 from ..ext_utils.bot_utils import cmd_exec
+from ..ext_utils.links_utils import is_url
 from ..telegram_helper.message_utils import send_message
 
 # Extensions that are valid for video tools
@@ -90,6 +92,13 @@ async def process_video_tool(listener, up_path):
     Shows UI, waits for user input, then runs FFmpeg muxing.
     Returns the (possibly modified) up_path.
     """
+    if getattr(listener, "_vt_processed", False):
+        state = getattr(listener, "_vt_state", None)
+        if state:
+            new_path = await _execute_vt_pipeline(listener, up_path, state)
+            return new_path if new_path else up_path
+        return up_path
+
     # Only work on single files
     if not await aiopath.isfile(up_path):
         LOGGER.info("Video Tool: up_path is a directory, skipping.")
@@ -324,3 +333,109 @@ async def _extract_single(input_path, map_spec, out_path):
     await process.communicate()
     if not await aiopath.exists(out_path):
         LOGGER.warning(f"Stream extraction failed for {map_spec}")
+
+
+async def pre_probe_and_show_ui(listener, file_, reply_to):
+    """
+    Tries to probe stream info before download starts (via streaming or chunks).
+    If successful, shows the VT UI to the user to configure.
+    """
+    task_id = str(listener.mid)
+    temp_dir = ospath.join(DOWNLOAD_DIR, f"vt_probe_{task_id}")
+    temp_path = None
+
+    async def _do_pre_probe():
+        nonlocal temp_path
+        audio_tracks, sub_tracks = [], []
+        filename = "video"
+
+        # 1. Telegram Media
+        if file_ is not None:
+            filename = file_.file_name or "video"
+            await makedirs(temp_dir, exist_ok=True)
+            temp_path = ospath.join(temp_dir, filename)
+
+            from ...core.tg_client import TgClient
+            async for chunk in TgClient.bot.stream_media(file_, limit=5):
+                async with aiopen(temp_path, "ab") as f:
+                    await f.write(chunk)
+
+            audio_tracks, sub_tracks = await probe_streams(temp_path)
+
+        # 2. Direct Link
+        elif listener.link and is_url(listener.link):
+            filename = ospath.basename(listener.link.split("?")[0]) or "video"
+
+            # Try direct probe on link first
+            audio_tracks, sub_tracks = await probe_streams(listener.link)
+
+            # Fallback to downloading a 10MB chunk
+            if not audio_tracks and not sub_tracks:
+                await makedirs(temp_dir, exist_ok=True)
+                temp_path = ospath.join(temp_dir, filename)
+                headers = {
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                from aiohttp import ClientSession
+                async with ClientSession() as session:
+                    async with session.get(listener.link, headers=headers) as response:
+                        async with aiopen(temp_path, "wb") as f:
+                            async for chunk in response.content.iter_chunked(10000000):
+                                await f.write(chunk)
+                                break
+
+                audio_tracks, sub_tracks = await probe_streams(temp_path)
+
+        if not audio_tracks and not sub_tracks:
+            raise ValueError("No audio or subtitle streams found in chunk")
+
+        # Clean up temporary chunk file
+        if temp_path and await aiopath.exists(temp_path):
+            await remove(temp_path)
+
+        state = {
+            "task_id": task_id,
+            "filename": filename,
+            "audio_tracks": audio_tracks,
+            "sub_tracks": sub_tracks,
+            "remove_audio": [],
+            "remove_sub": [],
+            "extract_audio": [],
+            "extract_sub": [],
+            "swap_audio": {},
+            "default_audio": None,
+            "default_sub": None,
+            "completed": False,
+            "pre_probed": True,
+        }
+        listener._vt_state = state
+        listener._vt_processed = True
+
+        done_event = Event()
+        _active_vt_sessions[task_id] = done_event
+
+        try:
+            from ...modules.video_tool_ui import render_video_tools_main
+            vt_msg = await send_message(listener.message, "⚙️ <b>Generating Video Tools UI...</b>")
+            listener._vt_msg = vt_msg
+            await render_video_tools_main(vt_msg, state)
+
+            try:
+                await wait_for(done_event.wait(), timeout=UI_TIMEOUT)
+            except Exception:
+                LOGGER.info(f"Video Tool pre-probe interaction timeout for task {task_id}")
+                state["completed"] = True
+
+            if state.get("cancelled", False):
+                listener._vt_state = None
+            else:
+                await vt_msg.delete()
+        finally:
+            _active_vt_sessions.pop(task_id, None)
+
+    try:
+        await wait_for(_do_pre_probe(), timeout=60.0)
+    except Exception as e:
+        LOGGER.warning(f"Video Tool: Pre-probing failed or timed out for task {task_id}: {e}. Falling back to full download first.")
+        if temp_path and await aiopath.exists(temp_path):
+            await remove(temp_path)

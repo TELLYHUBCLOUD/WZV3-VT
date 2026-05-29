@@ -163,9 +163,10 @@ async def process_video_tool(listener, up_path):
         # Render the UI
         from ...modules.video_tool_ui import render_video_tools_main
 
+        tag = getattr(listener, "tag", None) or (listener.message.from_user.mention if listener.message.from_user else "")
         vt_msg = await send_message(
             listener.message,
-            "⚙️ <b>Generating Video Tools UI...</b>",
+            f"{tag} ⚙️ <b>Generating Video Tools UI...</b>",
         )
         listener._vt_msg = vt_msg
         await render_video_tools_main(vt_msg, state)
@@ -430,7 +431,8 @@ async def pre_probe_and_show_ui(listener, file_, reply_to):
 
         try:
             from ...modules.video_tool_ui import render_video_tools_main
-            vt_msg = await send_message(listener.message, "⚙️ <b>Generating Video Tools UI...</b>")
+            tag = getattr(listener, "tag", None) or (listener.message.from_user.mention if listener.message.from_user else "")
+            vt_msg = await send_message(listener.message, f"{tag} ⚙️ <b>Generating Video Tools UI...</b>")
             listener._vt_msg = vt_msg
             await render_video_tools_main(vt_msg, state)
 

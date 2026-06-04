@@ -16,6 +16,10 @@ class FFmpegStatus:
         self.engine = EngineStatus().STATUS_FFMPEG
 
     def speed(self):
+        if getattr(self._obj, "speed_raw", 0):
+            return f"{get_readable_file_size(self._obj.speed_raw)}/s"
+        if speed_text := getattr(self._obj, "_speed_text", ""):
+            return speed_text
         return f"{get_readable_file_size(self._obj.speed_raw)}/s"
 
     def processed_bytes(self):
@@ -43,6 +47,8 @@ class FFmpegStatus:
             return MirrorStatus.STATUS_SPLIT
         elif self._cstatus == "Sample Video":
             return MirrorStatus.STATUS_SAMVID
+        elif self._cstatus == "Auto Process":
+            return MirrorStatus.STATUS_AUTOPROCESS
         else:
             return MirrorStatus.STATUS_FFMPEG
 

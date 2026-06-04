@@ -1,9 +1,11 @@
 # ruff: noqa: F403, F405
 
-from pyrogram.filters import command, regex
+from pyrogram.filters import command, create, regex
 from pyrogram.handlers import CallbackQueryHandler, EditedMessageHandler, MessageHandler
 from pyrogram.types import BotCommand
+from inspect import isawaitable
 
+from .. import bot_loop
 from ..core.config_manager import Config
 from ..helper.ext_utils.help_messages import BOT_COMMANDS
 from ..helper.telegram_helper.bot_commands import BotCommands
@@ -194,6 +196,20 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            bq_leech,
+            filters=command(BotCommands.BigQLeechCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            batch_leech,
+            filters=command(BotCommands.BatchLeechCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             jd_leech,
             filters=command(BotCommands.JdLeechCommand, case_sensitive=True)
             & CustomFilters.authorized,
@@ -327,11 +343,24 @@ def add_handlers():
             video_tools_callback, filters=regex("^vt_") & CustomFilters.authorized
         )
     )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            video_tools_media_collector,
+            filters=create(active_merge_track_filter) & CustomFilters.authorized,
+        )
+    )
     TgClient.bot.add_handler(CallbackQueryHandler(start_cb, filters=regex("^start")))
     TgClient.bot.add_handler(
         MessageHandler(
             torrent_search,
             filters=command(BotCommands.SearchCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            create_torrent,
+            filters=command(BotCommands.CreateTorrentCommand, case_sensitive=True)
             & CustomFilters.authorized,
         )
     )
@@ -376,6 +405,9 @@ def add_handlers():
             & CustomFilters.authorized,
         )
     )
+    TgClient.bot.add_handler(
+        MessageHandler(auto_leech, filters=CustomFilters.authorized)
+    )
     if Config.SET_COMMANDS:
         global BOT_COMMANDS
 
@@ -415,7 +447,7 @@ def add_handlers():
                 BOT_COMMANDS, "Login", "[password] Login to Bot", 14
             )
 
-        TgClient.bot.set_bot_commands(
+        command_result = TgClient.bot.set_bot_commands(
             [
                 BotCommand(
                     cmds[0] if isinstance(cmds, list) else cmds,
@@ -426,3 +458,5 @@ def add_handlers():
                 if cmds is not None
             ]
         )
+        if isawaitable(command_result):
+            bot_loop.create_task(command_result)

@@ -275,13 +275,16 @@ async def join_files(opath):
 
 
 async def split_file(f_path, split_size, listener):
-    out_path = f"{f_path}."
+    base_name, ext = ospath.splitext(f_path)
+    out_path = f"{base_name}.part"
+    suffix_args = [f"--additional-suffix={ext}"] if ext else []
     if listener.is_cancelled:
         return False
     listener.subproc = await create_subprocess_exec(
         "split",
         "--numeric-suffixes=1",
-        "--suffix-length=3",
+        "--suffix-length=2",
+        *suffix_args,
         f"--bytes={split_size}",
         f_path,
         out_path,

@@ -74,6 +74,23 @@ class TaskListener(TaskConfig):
     def __init__(self):
         super().__init__()
 
+    def _mark_bq_done(self, result):
+        event = getattr(self, "bq_done_event", None)
+        if event and not event.is_set():
+            self.bq_result = result
+            event.set()
+        controller_gid = getattr(self, "batch_controller_gid", "")
+        if controller_gid and result != "complete":
+            with suppress(Exception):
+                from ...modules.batch_task_registry import mark_controller_cancelled
+
+                mark_controller_cancelled(controller_gid, str(result))
+
+    def _mark_batch_download_done(self):
+        event = getattr(self, "batch_download_event", None)
+        if event and not event.is_set():
+            event.set()
+
     async def clean(self):
         with suppress(Exception):
             if st := intervals["status"]:
@@ -187,6 +204,14 @@ class TaskListener(TaskConfig):
         if self.folder_name:
             self.name = self.folder_name.strip("/").split("/", 1)[0]
 
+        if not await aiopath.exists(self.dir):
+            await self.on_upload_error(
+                f"Download folder missing: {self.dir}. "
+                "It was cleaned or cancelled before upload could start. "
+                "If this repeats, stop duplicate bot containers using the same VPS."
+            )
+            return
+
         if not await aiopath.exists(f"{self.dir}/{self.name}"):
             try:
                 files = await listdir(self.dir)
@@ -212,6 +237,15 @@ class TaskListener(TaskConfig):
 
         await remove_excluded_files(self.up_dir or self.dir, self.excluded_extensions)
 
+        from ..video_utils.auto_process import (
+            auto_enabled,
+            bool_setting,
+            maybe_enable_auto_unzip,
+            process_auto_pipeline,
+        )
+
+        await maybe_enable_auto_unzip(self, up_path)
+
         if not Config.QUEUE_ALL:
             async with queue_dict_lock:
                 if self.mid in non_queued_dl:
@@ -230,6 +264,15 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
             await remove_excluded_files(up_dir, self.excluded_extensions)
+
+        if auto_enabled(self) and not self.video_tool and not self.is_cancelled:
+            up_path = await process_auto_pipeline(self, up_path, gid)
+            if self.is_cancelled:
+                return
+            self.is_file = await aiopath.isfile(up_path)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
+            self.size = await get_path_size(up_dir)
+            self.clear()
 
         if self.ffmpeg_cmds:
             up_path = await self.proceed_ffmpeg(
@@ -254,7 +297,8 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
 
-        if (
+        metadata_allowed = not self.video_tool
+        if metadata_allowed and (
             (hasattr(self, "metadata_dict") and self.metadata_dict)
             or (hasattr(self, "audio_metadata_dict") and self.audio_metadata_dict)
             or (hasattr(self, "video_metadata_dict") and self.video_metadata_dict)
@@ -337,6 +381,7 @@ class TaskListener(TaskConfig):
             self.clear()
 
         self.subproc = None
+        self._mark_batch_download_done()
 
         add_to_queue, event = await check_running_tasks(self, "up")
         await start_from_queued()
@@ -393,7 +438,7 @@ class TaskListener(TaskConfig):
                 sync_to_async(drive.upload),
             )
             del drive
-        else:
+        elif not self.is_leech:
             LOGGER.info(f"Rclone Upload Name: {self.name}")
             RCTransfer = RcloneTransferHelper(self)
             async with task_dict_lock:
@@ -448,21 +493,26 @@ class TaskListener(TaskConfig):
             await send_message(self.message, user_message, button)
 
         elif self.is_leech:
+            complete_msg = (
+                self.user_dict.get("LEECH_COMPLETE_MSG")
+                if "LEECH_COMPLETE_MSG" in self.user_dict
+                else Config.LEECH_COMPLETE_MSG
+            )
             msg += f"\n<b>Total Files: </b>{folders}"
             if mime_type != 0:
                 msg += f"\n┠ <b>Corrupted Files</b> → {mime_type}"
             msg += f"\n┖ <b>Task By</b> → {self.tag}\n\n"
 
-            if self.bot_pm:
+            if complete_msg and self.bot_pm:
                 pmsg = msg
                 pmsg += "〶 <b><u>Action Performed :</u></b>\n"
                 pmsg += "⋗ <i>File(s) have been sent to User PM</i>\n\n"
                 if self.is_super_chat:
                     await send_message(self.message, pmsg)
 
-            if not files and not self.is_super_chat:
+            if complete_msg and not files and not self.is_super_chat:
                 await send_message(self.message, msg)
-            else:
+            elif complete_msg:
                 log_chat = self.user_id if self.bot_pm else self.message
                 msg += "〶 <b><u>Files List :</u></b>\n"
                 fmsg = ""
@@ -590,6 +640,7 @@ class TaskListener(TaskConfig):
                 non_queued_up.remove(self.mid)
 
         await start_from_queued()
+        self._mark_bq_done("complete")
 
     async def on_download_error(self, error, button=None, is_limit=False):
         async with task_dict_lock:
@@ -647,6 +698,7 @@ class TaskListener(TaskConfig):
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):
             await remove(self.thumb)
+        self._mark_bq_done(f"download_error: {error}")
 
     async def on_upload_error(self, error):
         async with task_dict_lock:
@@ -685,3 +737,4 @@ class TaskListener(TaskConfig):
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):
             await remove(self.thumb)
+        self._mark_bq_done(f"upload_error: {error}")

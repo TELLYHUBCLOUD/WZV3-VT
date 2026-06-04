@@ -13,7 +13,6 @@ from pyrogram.enums import ChatAction
 from .. import (
     DOWNLOAD_DIR,
     LOGGER,
-    cores,
     cpu_eater_lock,
     excluded_extensions,
     intervals,
@@ -50,6 +49,7 @@ from .ext_utils.media_utils import (
     take_ss,
 )
 from .ext_utils.metadata_utils import MetadataProcessor
+from .ext_utils.performance import get_ffmpeg_cores, get_ffmpeg_threads
 from .mirror_leech_utils.gdrive_utils.list import GoogleDriveList
 from .mirror_leech_utils.rclone_utils.list import RcloneList
 from .mirror_leech_utils.status_utils.ffmpeg_status import FFmpegStatus
@@ -733,25 +733,35 @@ class TaskConfig:
         return t_path if self.is_file and code == 0 else dl_path
 
     async def proceed_ffmpeg(self, dl_path, gid):
+        if not await aiopath.exists(dl_path):
+            LOGGER.error(f"FFmpeg input path missing: {dl_path}")
+            await send_message(
+                self.message,
+                f"Download path missing: <code>{dl_path}</code>\n"
+                "The task was cleaned or cancelled before FFmpeg could run.",
+            )
+            self.is_cancelled = True
+            return False
         checked = False
         cmds = [
             [part.strip() for part in split(item) if part.strip()]
             for item in self.ffmpeg_cmds
         ]
-        # Codec flags that specify encoding
-        _CODEC_FLAGS = {
-            "-c", "-c:v", "-c:a", "-c:s",
-            "-vcodec", "-acodec", "-scodec", "-codec",
-            "-codec:v", "-codec:a", "-codec:s",
-        }
         try:
             ffmpeg = FFMpeg(self)
             for ffmpeg_cmd in cmds:
                 self.proceed_count = 0
+                if "-threads" in ffmpeg_cmd:
+                    thread_index = ffmpeg_cmd.index("-threads")
+                    if (
+                        len(ffmpeg_cmd) > thread_index + 1
+                        and ffmpeg_cmd[thread_index + 1].lower() in {"0", "auto"}
+                    ):
+                        ffmpeg_cmd[thread_index + 1] = str(get_ffmpeg_threads())
                 cmd = [
                     "taskset",
                     "-c",
-                    f"{cores}",
+                    get_ffmpeg_cores(),
                     BinConfig.FFMPEG_NAME,
                     "-hide_banner",
                     "-loglevel",
@@ -760,24 +770,6 @@ class TaskConfig:
                     "pipe:1",
                 ] + ffmpeg_cmd
 
-                # Block encoding: only allow -c copy variants
-                has_encoding = False
-                for i, arg in enumerate(cmd):
-                    if arg in _CODEC_FLAGS and i + 1 < len(cmd):
-                        codec_val = cmd[i + 1].lower()
-                        if codec_val != "copy":
-                            has_encoding = True
-                            LOGGER.warning(
-                                f"Blocked FFmpeg encoding codec: "
-                                f"{arg} {cmd[i + 1]}"
-                            )
-                            break
-                if has_encoding:
-                    LOGGER.info(
-                        "Skipping FFmpeg cmd: encoding not allowed, "
-                        "only -c copy is permitted"
-                    )
-                    continue
                 if "-del" in cmd:
                     cmd.remove("-del")
                     delete_files = True

@@ -284,6 +284,24 @@ Set different metadata for audio/video/subtitle streams in User Settings > FFmpe
 • Video Metadata: <code>title={basename}|year={year}</code>
 • Subtitle Metadata: <code>language={sublang}|title=Subtitles</code>"""
 
+auto_process = """<b>Auto Process</b>
+Configure in /usettings > Auto Process.
+
+Order:
+download -> unzip -> remove streams -> smart merge -> intro subtitle -> metadata -> auto rename -> sequential upload
+
+Notes:
+1. Smart merge batches episodes under Telegram max size minus AUTO_MERGE_SAFETY_MB.
+2. Range names use <code>[S1-EP(01-06)]</code> and never mix seasons.
+3. Subtitle translate uses LIBRE_TRANSLATE_API_URL and optional LIBRE_TRANSLATE_API_KEY from config.py.
+4. Intro subtitles use INTRO_SUBTITLE_RANGES and fade in/out as a muxed subtitle track.
+5. Auto rename and auto thumbnail use AniList, Jikan, Kitsu, TMDb, then filename/video-frame fallback.
+6. AutoLeech can start leech tasks from plain links/files for authorized users when AUTO_LEECH is enabled.
+7. Caption <code>{filename}</code> keeps the full final name with prefix/suffix; <code>{upload_filename}</code> is the shortened Telegram filename.
+
+AutoRename variables include:
+<code>{file_name}</code> <code>{file_size}</code> <code>{file_caption}</code> <code>{languages}</code> <code>{subtitles}</code> <code>{duration}</code> <code>{ott}</code> <code>{resolution}</code> <code>{name}</code> <code>{title}</code> <code>{year}</code> <code>{quality}</code> <code>{season}</code> <code>{episode}</code> <code>{audio}</code> <code>{lib}</code> <code>{extension}</code> <code>{shortsub}</code> <code>{shortlang}</code> <code>{part}</code> <code>{raw_name}</code> <code>{link}</code> <code>{vcodec}</code> <code>{codec}</code> <code>{acodec}</code> <code>{audio_codec}</code> <code>{audio_channels}</code> <code>{audio_bitrate}</code> <code>{hdr}</code> <code>{dynamic_range}</code> <code>{release_group}</code> <code>{group}</code>."""
+
 YT_HELP_DICT = {
     "main": yt,
     "New-Name": f"{new_name}\nNote: Don't add file extension",
@@ -307,6 +325,7 @@ YT_HELP_DICT = {
     "Leech-Type": leech_as,
     "FFmpeg-Cmds": ffmpeg_cmds,
     "Metadata": metadata,
+    "Auto-Process": auto_process,
 }
 
 MIRROR_HELP_DICT = {
@@ -338,6 +357,7 @@ MIRROR_HELP_DICT = {
     "Leech-Type": leech_as,
     "FFmpeg-Cmds": ffmpeg_cmds,
     "Metadata": metadata,
+    "Auto-Process": auto_process,
 }
 
 CLONE_HELP_DICT = {
@@ -390,6 +410,8 @@ def get_bot_commands():
         "UpHoster": "[link/file] Upload to DDL Servers",
         "Leech": "[link/file] Leech files to Upload to Telegram",
         "QbLeech": "[magnet/torrent] Leech files to Upload to Telegram using qbit",
+        "BigQLeech": "[magnet/torrent] Leech huge qB torrents in safe 30GB batches",
+        "BatchLeech": "[links] Leech multiple links with download/upload batch limits",
         "YtdlLeech": "[link] Leech YouTube, m3u8, Social Media and yt-dlp supported urls",
         "Clone": "[link] Clone files/folders to GDrive",
         "UserSet": "User personal settings",
@@ -397,6 +419,7 @@ def get_bot_commands():
         "Count": "[link] Count no. of files/folders in GDrive",
         "List": "[query] Search any Text which is available in GDrive",
         "Search": "[query] Search torrents via Qbit Plugins",
+        "CreateTorrent": "[link/reply] Create torrent release pack",
         "MediaInfo": "[reply/link] Get MediaInfo of the Target Media",
         "Select": "[gid/reply] Select files for NZB, Aria2, Qbit Tasks",
         "Ping": "Ping Bot to test Response Speed",
@@ -463,6 +486,14 @@ def get_help_string():
             help_lines.append(f"{cmd_str}: Start leeching to Telegram.")
         elif key == "QbLeech":
             help_lines.append(f"{cmd_str}: Start leeching using qBittorrent.")
+        elif key == "BigQLeech":
+            help_lines.append(
+                f"{cmd_str}: qB-only huge torrent leech. Downloads/uploads natural-order batches up to BQLEECH_BATCH_SIZE_GB."
+            )
+        elif key == "BatchLeech":
+            help_lines.append(
+                f"{cmd_str} link1 link2 link3: Batch leech links with BLEECH download/upload limits."
+            )
         elif key == "JdLeech":
             help_lines.append(f"{cmd_str}: Start leeching using JDownloader.")
         elif key == "NzbLeech":
@@ -499,6 +530,10 @@ def get_help_string():
             help_lines.append(f"{cmd_str} [query]: Search in Google Drive(s).")
         elif key == "Search":
             help_lines.append(f"{cmd_str} [query]: Search for torrents with API.")
+        elif key == "CreateTorrent":
+            help_lines.append(
+                f"{cmd_str} [link/reply]: Save video for seeding, send HD thumbnail, header contact sheet, BBCode description, and .torrent file."
+            )
         elif key == "MediaInfo":
             help_lines.append(f"{cmd_str} [query]: Get media info.")
         elif key == "Status":

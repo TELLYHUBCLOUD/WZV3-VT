@@ -31,6 +31,68 @@ from .tg_client import TgClient
 from .torrent_manager import TorrentManager
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+ARIA2_DOWNLOAD_ONLY_PERF_KEYS = {
+    "continue",
+    "max-connection-per-server",
+    "split",
+    "min-split-size",
+    "seed-ratio",
+    "seed-time",
+    "timeout",
+    "retry-wait",
+}
+
+
+def _aria2_global_performance_options():
+    return {
+        "max-concurrent-downloads": str(
+            max(1, _safe_int(Config.ARIA2_MAX_CONCURRENT_DOWNLOADS, 4))
+        ),
+        "max-overall-download-limit": str(Config.ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT or "0"),
+        "max-overall-upload-limit": str(Config.ARIA2_MAX_OVERALL_UPLOAD_LIMIT or "1M"),
+    }
+
+
+def aria2_download_performance_options():
+    return {
+        "continue": "true",
+        "max-connection-per-server": str(
+            max(1, _safe_int(Config.ARIA2_MAX_CONNECTION_PER_SERVER, 16))
+        ),
+        "split": str(max(1, _safe_int(Config.ARIA2_SPLIT, 16))),
+        "min-split-size": str(Config.ARIA2_MIN_SPLIT_SIZE or "1M"),
+        "seed-ratio": "0",
+        "seed-time": "0",
+        "timeout": "60",
+        "retry-wait": "5",
+    }
+
+
+def _strip_download_only_aria2_options(options):
+    for key in ARIA2_DOWNLOAD_ONLY_PERF_KEYS:
+        options.pop(key, None)
+    return options
+
+
+def _qbit_performance_options():
+    up_limit = max(0, _safe_int(Config.QBIT_UPLOAD_LIMIT, 1048576))
+    return {
+        "dl_limit": 0,
+        "up_limit": up_limit,
+        "max_active_downloads": 3,
+        "max_active_uploads": 1,
+        "max_uploads": 8,
+        "max_uploads_per_torrent": 4,
+    }
+
+
 async def update_qb_options():
     LOGGER.info("Get qBittorrent options from server")
     if not qbit_options:
@@ -46,19 +108,27 @@ async def update_qb_options():
             if k.startswith("rss"):
                 del qbit_options[k]
         qbit_options["web_ui_password"] = "admin1"
+        qbit_options.update(_qbit_performance_options())
         await TorrentManager.qbittorrent.app.set_preferences(
-            {"web_ui_password": "admin1"}
+            {"web_ui_password": "admin1", **_qbit_performance_options()}
         )
     else:
+        qbit_options.update(_qbit_performance_options())
         await TorrentManager.qbittorrent.app.set_preferences(qbit_options)
 
 
 async def update_aria2_options():
     LOGGER.info("Get aria2 options from server")
+    perf_options = _aria2_global_performance_options()
     if not aria2_options:
         op = await TorrentManager.aria2.getGlobalOption()
         aria2_options.update(op)
+        _strip_download_only_aria2_options(aria2_options)
+        aria2_options.update(perf_options)
+        await TorrentManager.aria2.changeGlobalOption(perf_options)
     else:
+        _strip_download_only_aria2_options(aria2_options)
+        aria2_options.update(perf_options)
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
 
 

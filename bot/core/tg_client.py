@@ -1,5 +1,6 @@
 from pyrogram import Client, enums
-from asyncio import Lock, gather
+from pyrogram.errors import FloodWait
+from asyncio import Lock, gather, sleep
 from inspect import signature
 
 from .. import LOGGER
@@ -36,13 +37,26 @@ class TgClient:
         return Client(*args, **kwargs)
 
     @classmethod
+    async def _start_with_floodwait(cls, client, label):
+        while True:
+            try:
+                return await client.start()
+            except FloodWait as e:
+                wait_time = int(getattr(e, "value", 0) or 0) + 5
+                wait_time = max(wait_time, 5)
+                LOGGER.warning(
+                    f"{label} hit Telegram FloodWait. Waiting {wait_time}s before retry."
+                )
+                await sleep(wait_time)
+
+    @classmethod
     async def start_hclient(cls, no, b_token):
         try:
-            hbot = await cls.wztgClient(
+            hbot = await cls._start_with_floodwait(cls.wztgClient(
                 f"WZ-HBot{no}",
                 bot_token=b_token,
                 no_updates=True,
-            ).start()
+            ), f"Helper bot {no}")
             LOGGER.info(f"Helper Bot [@{hbot.me.username}] Started!")
             cls.helper_bots[no], cls.helper_loads[no] = hbot, 0
         except Exception as e:
@@ -71,7 +85,7 @@ class TgClient:
             bot_token=Config.BOT_TOKEN,
             workdir="/usr/src/app",
         )
-        await cls.bot.start()
+        await cls._start_with_floodwait(cls.bot, "Main bot")
         cls.BNAME = cls.bot.me.username
         cls.ID = Config.BOT_TOKEN.split(":", 1)[0]
         LOGGER.info(f"WZ Bot : [@{cls.BNAME}] Started!")
@@ -87,7 +101,7 @@ class TgClient:
                     sleep_threshold=60,
                     no_updates=True,
                 )
-                await cls.user.start()
+                await cls._start_with_floodwait(cls.user, "User session")
                 cls.IS_PREMIUM_USER = cls.user.me.is_premium
                 if cls.IS_PREMIUM_USER:
                     cls.MAX_SPLIT_SIZE = 4194304000
@@ -101,6 +115,12 @@ class TgClient:
     @classmethod
     async def stop(cls):
         async with cls._lock:
+            try:
+                from ..helper.ext_utils.starfallx_upload import starfallx_upload
+
+                await starfallx_upload.stop_all()
+            except Exception as e:
+                LOGGER.warning(f"Failed to stop StarFallX upload clients: {e}")
             if cls.bot:
                 await cls.bot.stop()
                 cls.bot = None

@@ -1,7 +1,7 @@
-from asyncio import sleep
+from asyncio import create_task, sleep
 from logging import getLogger
 from os import path as ospath, walk
-from re import match as re_match, sub as re_sub
+from re import IGNORECASE, match as re_match, sub as re_sub
 from time import time
 
 from aioshutil import rmtree
@@ -35,19 +35,25 @@ from ....core.config_manager import Config
 from ....core.tg_client import TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
+from ...ext_utils.performance import get_tg_copy_delay, get_tg_flood_wait_multiplier
+from ...ext_utils.starfallx_upload import (
+    private_dump_only,
+    starfallx_upload,
+)
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 from ...telegram_helper.message_utils import send_message
 from ...ext_utils.media_utils import (
     apply_regex_rename,
     apply_template_rename,
+    build_caption_metadata,
     download_image_thumb,
+    get_anime_landscape_thumbnail,
     get_audio_thumbnail,
     get_document_type,
     get_final_poster_url,
     get_media_info,
     get_multiple_frames_thumbnail,
     get_video_thumbnail,
-    get_md5_hash,
 )
 from ...telegram_helper.message_utils import delete_message
 
@@ -74,6 +80,8 @@ class TelegramUploader:
         self._lsuffix = ""
         self._lcaption = ""
         self._lfont = ""
+        self._complete_msg = True
+        self._sequential_leech = True
         self._bot_pm = False
         self._media_group = False
         self._is_private = False
@@ -81,10 +89,16 @@ class TelegramUploader:
         self._log_msg = None
         self._user_session = self._listener.user_transmission
         self._error = ""
+        self._deferred_copies = []
+        self._active_route = None
+        self._private_dump_only = False
+        self._private_dump_warned = False
 
     async def _upload_progress(self, current, _):
         if self._listener.is_cancelled:
-            if self._user_session:
+            if self._active_route and self._active_route.direct:
+                self._active_route.client.stop_transmission()
+            elif self._user_session:
                 TgClient.user.stop_transmission()
             else:
                 self._listener.client.stop_transmission()
@@ -100,6 +114,8 @@ class TelegramUploader:
             "LEECH_SUFFIX": ("_lsuffix", ""),
             "LEECH_CAPTION": ("_lcaption", ""),
             "LEECH_FONT": ("_lfont", ""),
+            "LEECH_COMPLETE_MSG": ("_complete_msg", True),
+            "SEQUENTIAL_LEECH": ("_sequential_leech", True),
         }
 
         for key, (attr, default) in settings_map.items():
@@ -189,7 +205,19 @@ class TelegramUploader:
             or Config.RENAME_METHOD
         )
 
-        if autorename_enabled:
+        auto_process_enabled = (
+            self._listener.user_dict.get("AUTO_PROCESS")
+            if "AUTO_PROCESS" in self._listener.user_dict
+            else getattr(Config, "AUTO_PROCESS", False)
+        )
+        if auto_process_enabled:
+            autorename_enabled = bool(autorename_enabled)
+        if getattr(self._listener, "video_tool", False):
+            autorename_enabled = False
+
+        merge_range_name = re_match(r"^\[S\d+-EP\(\d+-\d+\)\]", file_, IGNORECASE)
+
+        if autorename_enabled and not merge_range_name:
             try:
                 if rename_method == "auto":
                     template = (
@@ -198,7 +226,11 @@ class TelegramUploader:
                     )
                     if template:
                         file_ = await apply_template_rename(
-                            file_, template, self._up_path
+                            file_,
+                            template,
+                            self._up_path,
+                            file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
+                            link=getattr(self._listener, "source_url", ""),
                         )
                         cap_file_ = file_
                 elif rename_method == "regex":
@@ -224,12 +256,12 @@ class TelegramUploader:
             self._lsuffix = re_sub(r"<.*?>", "", self._lsuffix).replace(r"\s", " ")
 
         cap_mono = (
-            f"<{Config.LEECH_FONT}>{cap_file_}</{Config.LEECH_FONT}>"
-            if Config.LEECH_FONT
+            f"<{self._lfont}>{cap_file_}</{self._lfont}>"
+            if self._lfont
             else cap_file_
         )
         if self._lcaption:
-            self._lcaption = re_sub(
+            caption_template = re_sub(
                 r"(\\\||\\\{|\\\}|\\s)",
                 lambda m: {r"\|": "%%", r"\{": "&%&", r"\}": "$%$", r"\s": " "}[
                     m.group(0)
@@ -237,24 +269,26 @@ class TelegramUploader:
                 self._lcaption,
             )
 
-            parts = self._lcaption.split("|")
+            parts = caption_template.split("|")
             parts[0] = re_sub(
                 r"\{([^}]+)\}", lambda m: f"{{{m.group(1).lower()}}}", parts[0]
             )
-            up_path = ospath.join(dirpath, pre_file_)
-            dur, qual, lang, subs = await get_media_info(up_path, True)
-            cap_mono = parts[0].format(
-                filename=cap_file_,
-                size=get_readable_file_size(await aiopath.getsize(up_path)),
-                duration=get_readable_time(dur),
-                quality=qual,
-                languages=lang,
-                subtitles=subs,
-                md5_hash=await sync_to_async(get_md5_hash, up_path),
+            up_path = self._up_path or ospath.join(dirpath, pre_file_)
+            caption_data = await build_caption_metadata(
+                cap_file_,
+                up_path,
                 mime_type=self._listener.file_details.get("mime_type", "text/plain"),
+                upload_filename=file_,
                 prefilename=self._listener.file_details.get("filename", ""),
                 precaption=self._listener.file_details.get("caption", ""),
+                file_caption=self._listener.file_details.get("caption", ""),
+                link=getattr(self._listener, "source_url", ""),
             )
+            try:
+                cap_mono = parts[0].format_map(caption_data)
+            except Exception as e:
+                LOGGER.warning(f"Caption format failed for {pre_file_}: {e}")
+                cap_mono = cap_file_
 
             for part in parts[1:]:
                 args = part.split(":")
@@ -355,23 +389,90 @@ class TelegramUploader:
         if self._listener.is_super_chat or self._listener.up_dest:
             for m in msgs_list:
                 self._msgs_dict[m.link] = m.caption
+                self._queue_deferred_copy(m)
         self._sent_msg = msgs_list[-1]
 
 
-    async def _copy_media(self):
+    def _queue_deferred_copy(self, msg):
+        if not msg:
+            return
+        if self._private_dump_only:
+            if not self._private_dump_warned:
+                self._private_dump_warned = True
+                create_task(
+                    send_message(
+                        self._listener.user_id,
+                        "StarFallX: this task matched private-dump-only filters, so forwarding to user PM/dump was skipped.",
+                    )
+                )
+            return
+        if self._bot_pm or self._listener.leech_dest:
+            if self._sequential_leech:
+                self._deferred_copies.append((msg.chat.id, msg.id))
+            else:
+                create_task(self._copy_deferred_message(msg.chat.id, msg.id))
+
+    def _get_leech_dest(self):
+        leech_dest = self._listener.leech_dest
+        thread_id = None
+        if not leech_dest:
+            return None, None
+        if not isinstance(leech_dest, int):
+            if "|" in str(leech_dest):
+                leech_dest, thread_id = str(leech_dest).split("|", 1)
+                thread_id = int(thread_id) if thread_id.lstrip("-").isdigit() else None
+            if str(leech_dest).lstrip("-").isdigit():
+                leech_dest = int(leech_dest)
+        return leech_dest, thread_id
+
+    async def _copy_message_with_backoff(self, **kwargs):
         try:
-            if self._bot_pm:
-                await TgClient.bot.copy_message(
+            return await TgClient.bot.copy_message(**kwargs)
+        except (FloodWait, FloodPremiumWait) as f:
+            wait_time = max(f.value + 1, f.value * get_tg_flood_wait_multiplier())
+            LOGGER.warning(f"Copy flood wait: sleeping {wait_time:.1f}s")
+            await sleep(wait_time)
+            return await TgClient.bot.copy_message(**kwargs)
+
+    async def _flush_deferred_copies(self):
+        if not self._deferred_copies:
+            return
+        for chat_id, msg_id in self._deferred_copies:
+            if self._listener.is_cancelled:
+                return
+            await self._copy_deferred_message(chat_id, msg_id)
+            await sleep(get_tg_copy_delay())
+
+    async def _copy_deferred_message(self, chat_id, msg_id):
+        leech_dest, thread_id = self._get_leech_dest()
+        if self._bot_pm:
+            try:
+                await self._copy_message_with_backoff(
                     chat_id=self._listener.user_id,
-                    from_chat_id=self._sent_msg.chat.id,
-                    message_id=self._sent_msg.id,
+                    from_chat_id=chat_id,
+                    message_id=msg_id,
                     reply_to_message_id=(
-                        self._listener.pm_msg.id if self._listener.pm_msg else None
+                        self._listener.pm_msg.id
+                        if self._listener.pm_msg
+                        else None
                     ),
                 )
-        except Exception as err:
-            if not self._listener.is_cancelled:
+            except Exception as err:
                 LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
+        if leech_dest:
+            try:
+                await self._copy_message_with_backoff(
+                    chat_id=leech_dest,
+                    from_chat_id=chat_id,
+                    message_id=msg_id,
+                    message_thread_id=thread_id,
+                )
+            except Exception as e:
+                LOGGER.error(f"Failed to forward to {leech_dest}: {e}")
+                await send_message(
+                    self._listener.user_id,
+                    f"Failed to forward to {leech_dest}\n{e}",
+                )
 
     async def upload(self):
         await self._user_settings()
@@ -477,6 +578,9 @@ class TelegramUploader:
                 f"Files Corrupted or unable to upload. {self._error or 'Check logs!'}"
             )
             return
+        await self._flush_deferred_copies()
+        if self._listener.is_cancelled:
+            return
         LOGGER.info(f"Leech Completed: {self._listener.name}")
         await self._listener.on_upload_complete(
             None, self._msgs_dict, self._total_files, self._corrupted
@@ -488,6 +592,56 @@ class TelegramUploader:
         stop=stop_after_attempt(3),
         retry=retry_if_exception_type(Exception),
     )
+    async def _send_direct_file(
+        self,
+        route,
+        key,
+        cap_mono,
+        thumb=None,
+        duration=0,
+        width=480,
+        height=320,
+        artist=None,
+        title=None,
+    ):
+        common = {
+            "chat_id": route.chat_id,
+            "caption": cap_mono,
+            "disable_notification": True,
+            "message_thread_id": route.thread_id,
+            "progress": self._upload_progress,
+        }
+        if key == "documents":
+            return await route.client.send_document(
+                document=self._up_path,
+                thumb=thumb,
+                disable_content_type_detection=True,
+                **common,
+            )
+        if key == "videos":
+            return await route.client.send_video(
+                video=self._up_path,
+                duration=duration,
+                width=width,
+                height=height,
+                thumb=thumb,
+                supports_streaming=True,
+                **common,
+            )
+        if key == "audios":
+            return await route.client.send_audio(
+                audio=self._up_path,
+                duration=duration,
+                performer=artist,
+                title=title,
+                thumb=thumb,
+                **common,
+            )
+        return await route.client.send_photo(
+            photo=self._up_path,
+            **common,
+        )
+
     async def _upload_file(self, cap_mono, file, o_path, force_document=False):
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")
@@ -511,20 +665,13 @@ class TelegramUploader:
             self._thumb = None
         thumb = self._thumb
         self._is_corrupted = False
+        route = None
+        key = ""
         try:
             is_video, is_audio, is_image = await get_document_type(self._up_path)
+            queued_for_media_group = False
 
-            if not is_image and thumb is None:
-                file_name = ospath.splitext(file)[0]
-                thumb_path = f"{self._path}/yt-dlp-thumb/{file_name}.jpg"
-                if await aiopath.isfile(thumb_path):
-                    thumb = thumb_path
-                elif await aiopath.isfile(thumb_path.replace("/yt-dlp-thumb", "")):
-                    thumb = thumb_path.replace("/yt-dlp-thumb", "")
-                elif is_audio and not is_video:
-                    thumb = await get_audio_thumbnail(self._up_path)
-
-            # TMDb Auto-Thumbnail: fetch poster if still no thumb
+            # Auto thumbnail order: custom thumb, TMDb poster/backdrop, then local media.
             if not is_image and thumb is None:
                 auto_thumb_enabled = (
                     self._listener.user_dict.get("AUTO_THUMBNAIL")
@@ -539,15 +686,50 @@ class TelegramUploader:
                             self._listener.user_dict.get("lremname_regex")
                             or Config.LEECH_FILENAME_REMNAME_REGEX
                         )
-                        poster_url = await get_final_poster_url(
-                            custom_name or file, as_doc, rename_regex
-                        )
-                        if poster_url:
-                            tmdb_thumb = await download_image_thumb(poster_url)
-                            if tmdb_thumb:
-                                thumb = tmdb_thumb
+                        if is_video:
+                            thumb = await get_anime_landscape_thumbnail(
+                                self._up_path,
+                                custom_name or file,
+                                None,
+                                rename_regex,
+                            )
+                        if thumb is None:
+                            poster_url = await get_final_poster_url(
+                                custom_name or file, as_doc, rename_regex
+                            )
+                            if poster_url:
+                                tmdb_thumb = await download_image_thumb(
+                                    poster_url, landscape=not as_doc
+                                )
+                                if tmdb_thumb:
+                                    thumb = tmdb_thumb
                     except Exception as e:
                         LOGGER.warning(f"Auto-thumbnail failed: {e}")
+
+            if not is_image and thumb is None:
+                file_name = ospath.splitext(file)[0]
+                thumb_path = f"{self._path}/yt-dlp-thumb/{file_name}.jpg"
+                if await aiopath.isfile(thumb_path):
+                    thumb = thumb_path
+                elif await aiopath.isfile(thumb_path.replace("/yt-dlp-thumb", "")):
+                    thumb = thumb_path.replace("/yt-dlp-thumb", "")
+                elif is_audio and not is_video:
+                    thumb = await get_audio_thumbnail(self._up_path)
+
+            private_text = " ".join(
+                filter(
+                    None,
+                    [
+                        file,
+                        getattr(self._listener, "source_url", ""),
+                        getattr(self._listener, "file_details", {}).get("caption", ""),
+                    ],
+                )
+            )
+            self._private_dump_only = bool(self._private_dump_only or private_dump_only(private_text))
+            f_size = await aiopath.getsize(self._up_path)
+            route = await starfallx_upload.acquire_route(self._listener, f_size)
+            self._active_route = route
 
             if (
                 self._listener.as_doc
@@ -559,18 +741,25 @@ class TelegramUploader:
                     thumb = await get_video_thumbnail(self._up_path, None)
 
                 if self._listener.is_cancelled:
+                    await starfallx_upload.release_route(route)
+                    self._active_route = None
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_document(
-                    document=self._up_path,
-                    quote=True,
-                    thumb=thumb,
-                    caption=cap_mono,
-                    disable_content_type_detection=True,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                if route.direct:
+                    self._sent_msg = await self._send_direct_file(
+                        route, key, cap_mono, thumb=thumb
+                    )
+                else:
+                    self._sent_msg = await self._sent_msg.reply_document(
+                        document=self._up_path,
+                        quote=True,
+                        thumb=thumb,
+                        caption=cap_mono,
+                        disable_content_type_detection=True,
+                        disable_notification=True,
+                        progress=self._upload_progress,
+                    )
             elif is_video:
                 key = "videos"
                 duration = (await get_media_info(self._up_path))[0]
@@ -589,55 +778,87 @@ class TelegramUploader:
                     width = 480
                     height = 320
                 if self._listener.is_cancelled:
+                    await starfallx_upload.release_route(route)
+                    self._active_route = None
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_video(
-                    video=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    thumb=thumb,
-                    cover=thumb,
-                    supports_streaming=True,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                if route.direct:
+                    self._sent_msg = await self._send_direct_file(
+                        route,
+                        key,
+                        cap_mono,
+                        thumb=thumb,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                    )
+                else:
+                    self._sent_msg = await self._sent_msg.reply_video(
+                        video=self._up_path,
+                        quote=True,
+                        caption=cap_mono,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        thumb=thumb,
+                        cover=thumb,
+                        supports_streaming=True,
+                        disable_notification=True,
+                        progress=self._upload_progress,
+                    )
             elif is_audio:
                 key = "audios"
                 duration, artist, title = await get_media_info(self._up_path)
                 if self._listener.is_cancelled:
+                    await starfallx_upload.release_route(route)
+                    self._active_route = None
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_audio(
-                    audio=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    duration=duration,
-                    performer=artist,
-                    title=title,
-                    thumb=thumb,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                if route.direct:
+                    self._sent_msg = await self._send_direct_file(
+                        route,
+                        key,
+                        cap_mono,
+                        thumb=thumb,
+                        duration=duration,
+                        artist=artist,
+                        title=title,
+                    )
+                else:
+                    self._sent_msg = await self._sent_msg.reply_audio(
+                        audio=self._up_path,
+                        quote=True,
+                        caption=cap_mono,
+                        duration=duration,
+                        performer=artist,
+                        title=title,
+                        thumb=thumb,
+                        disable_notification=True,
+                        progress=self._upload_progress,
+                    )
             else:
                 key = "photos"
                 if self._listener.is_cancelled:
+                    await starfallx_upload.release_route(route)
+                    self._active_route = None
                     return
-                self._sent_msg = await self._sent_msg.reply_photo(
-                    photo=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                if route.direct:
+                    self._sent_msg = await self._send_direct_file(route, key, cap_mono)
+                else:
+                    self._sent_msg = await self._sent_msg.reply_photo(
+                        photo=self._up_path,
+                        quote=True,
+                        caption=cap_mono,
+                        disable_notification=True,
+                        progress=self._upload_progress,
+                    )
 
             if (
                 not self._listener.is_cancelled
                 and self._media_group
+                and not route.direct
                 and (self._sent_msg.video or self._sent_msg.document)
             ):
                 key = "documents" if self._sent_msg.document else "videos"
@@ -656,31 +877,10 @@ class TelegramUploader:
                         await self._send_media_group(pname, key, msgs)
                     else:
                         self._last_msg_in_group = True
+                    queued_for_media_group = True
 
-            if self._sent_msg:
-                await self._copy_media()
-                if self._listener.leech_dest:
-                    try:
-                        leech_dest = self._listener.leech_dest
-                        if not isinstance(leech_dest, int):
-                            if "|" in str(leech_dest):
-                                leech_dest, _ = str(leech_dest).split("|", 1)
-                            if leech_dest.lstrip("-").isdigit():
-                                leech_dest = int(leech_dest)
-                        await TgClient.bot.copy_message(
-                            chat_id=leech_dest,
-                            from_chat_id=self._sent_msg.chat.id,
-                            message_id=self._sent_msg.id,
-                        )
-                    except Exception as e:
-                        if not self._listener.is_cancelled:
-                            LOGGER.error(
-                                f"Failed to forward to {self._listener.leech_dest}: {e}"
-                            )
-                            await send_message(
-                                self._listener.user_id,
-                                f"Failed to forward to {self._listener.leech_dest}\n{e}",
-                            )
+            if self._sent_msg and not queued_for_media_group:
+                self._queue_deferred_copy(self._sent_msg)
 
             if (
                 self._thumb is None
@@ -688,9 +888,14 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
+            await starfallx_upload.release_route(route)
+            self._active_route = None
         except (FloodWait, FloodPremiumWait) as f:
             LOGGER.warning(str(f))
-            await sleep(f.value * 1.3)
+            flood_wait = max(f.value + 1, f.value * get_tg_flood_wait_multiplier())
+            await starfallx_upload.release_route(route, failed=bool(route and route.direct), flood_wait=flood_wait)
+            self._active_route = None
+            await sleep(flood_wait)
             if (
                 self._thumb is None
                 and thumb is not None
@@ -699,6 +904,8 @@ class TelegramUploader:
                 await remove(thumb)
             return await self._upload_file(cap_mono, file, o_path)
         except Exception as err:
+            await starfallx_upload.release_route(route, failed=bool(route and route.direct))
+            self._active_route = None
             if (
                 self._thumb is None
                 and thumb is not None

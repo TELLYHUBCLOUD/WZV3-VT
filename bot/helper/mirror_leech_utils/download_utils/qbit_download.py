@@ -97,8 +97,33 @@ async def add_qb_torrent(listener, path, ratio, seed_time):
             LOGGER.info(f"QbitDownload started: {tor_info.name} - Hash: {ext_hash}")
 
         await listener.on_download_start()
+        listener.bq_started = True
 
-        if Config.BASE_URL and listener.select:
+        bq_selected = getattr(listener, "bq_selected_files", None)
+        if bq_selected is not None:
+            bq_unselected = getattr(listener, "bq_unselected_files", [])
+            if not add_to_queue:
+                await TorrentManager.qbittorrent.torrents.stop([ext_hash])
+            if bq_unselected:
+                await TorrentManager.qbittorrent.torrents.file_prio(
+                    hash=ext_hash, id=bq_unselected, priority=0
+                )
+            if bq_selected:
+                await TorrentManager.qbittorrent.torrents.file_prio(
+                    hash=ext_hash, id=bq_selected, priority=1
+                )
+            await send_message(
+                listener.message,
+                (
+                    f"Big Queue batch {getattr(listener, 'bq_batch_label', '')}: "
+                    f"selected <code>{len(bq_selected)}</code> file(s)."
+                ),
+            )
+            if listener.multi <= 1:
+                await send_status_message(listener.message)
+            if not add_to_queue:
+                await TorrentManager.qbittorrent.torrents.start([ext_hash])
+        elif Config.BASE_URL and listener.select:
             if listener.link.startswith("magnet:"):
                 metamsg = "Downloading Metadata, wait then you can select files. Use torrent file to avoid this wait."
                 meta = await send_message(listener.message, metamsg)

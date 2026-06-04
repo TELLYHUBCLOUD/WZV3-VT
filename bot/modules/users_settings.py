@@ -1,10 +1,12 @@
+import json
 from asyncio import sleep
 from functools import partial
 from html import escape
 from io import BytesIO
 from os import getcwd
-from re import sub
+from re import search, sub
 from time import time
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from aiofiles.os import makedirs, remove
 from aiofiles.os import path as aiopath
@@ -24,6 +26,14 @@ from ..helper.ext_utils.bot_utils import (
 )
 from ..helper.ext_utils.db_handler import database
 from ..helper.ext_utils.media_utils import create_thumb
+from ..helper.ext_utils.starfallx_upload import (
+    HELPER_PIN_HASH_KEY,
+    HELPER_TOKENS_KEY,
+    USER_BOT_TOKEN_KEY,
+    safe_helper_tokens,
+    safe_user_token_data,
+    starfallx_upload,
+)
 from ..helper.telegram_helper.button_build import ButtonMaker
 from ..helper.telegram_helper.message_utils import (
     delete_message,
@@ -34,6 +44,17 @@ from ..helper.telegram_helper.message_utils import (
 
 handler_dict = {}
 
+
+def config_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "y", "on"}
+
 leech_options = [
     "THUMBNAIL",
     "LEECH_SPLIT_SIZE",
@@ -41,9 +62,20 @@ leech_options = [
     "LEECH_PREFIX",
     "LEECH_SUFFIX",
     "LEECH_CAPTION",
+    "LEECH_FONT",
     "THUMBNAIL_LAYOUT",
     "lremname_auto",
     "lremname_regex",
+    "SUBTITLE_TRANSLATE_TARGET",
+    "INTRO_SUBTITLE_TEXT",
+]
+auto_process_options = [
+    "AUTO_KEEP_AUDIO_LANGS",
+    "AUTO_KEEP_SUBTITLE_LANGS",
+    "AUTO_AUDIO_ORDER",
+    "AUTO_SUBTITLE_ORDER",
+    "AUTO_MERGE_FILENAME",
+    "INTRO_SUBTITLE_RANGES",
 ]
 uphoster_options = [
     "GOFILE_TOKEN",
@@ -55,7 +87,6 @@ uphoster_options = [
 rclone_options = ["RCLONE_CONFIG", "RCLONE_PATH", "RCLONE_FLAGS"]
 gdrive_options = ["TOKEN_PICKLE", "GDRIVE_ID", "INDEX_URL"]
 ffset_options = [
-    "FFMPEG_CMDS",
     "METADATA",
     "AUDIO_METADATA",
     "VIDEO_METADATA",
@@ -114,12 +145,57 @@ user_settings_text = {
     "LEECH_CAPTION": (
         "",
         "",
-        "Send Leech Caption. You can add HTML tags. Example: <code>@mychannel</code>.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+        "Send Leech Caption. You can add HTML tags and placeholders: <code>{filename}</code> <code>{title}</code> <code>{season}</code> <code>{episode}</code> <code>{size}</code> <code>{duration}</code> <code>{resolution}</code> <code>{quality}</code> <code>{bit}</code> <code>{ott}</code> <code>{lib}</code> <code>{languages}</code> <code>{subtitles}</code>.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "LEECH_FONT": (
+        "String",
+        "Caption font tag. Supported values: b, i, code, or empty for normal.",
+        "Send caption font tag: <code>b</code>, <code>i</code>, <code>code</code>, or <code>none</code>.\n<b>Timeout:</b> 60 sec",
     ),
     "THUMBNAIL_LAYOUT": (
         "",
         "",
         "Send thumbnail layout (widthxheight, 2x2, 3x3, 2x4, 4x4, ...). Example: 3x3.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "SUBTITLE_TRANSLATE_TARGET": (
+        "",
+        "",
+        "Send subtitle translate target language code. Example: en, ta, hi.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "INTRO_SUBTITLE_TEXT": (
+        "",
+        "",
+        "Send intro subtitle text to mux at the start of videos. Send empty text to disable.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "INTRO_SUBTITLE_RANGES": (
+        "",
+        "Intro subtitle display ranges with fade. The intro track is muxed as the first/default subtitle.",
+        "Send ranges like <code>00:00:00 - 00:00:05 | 00:01:20 - 00:01:25</code>.</i> \nâ”– <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "AUTO_KEEP_AUDIO_LANGS": (
+        "",
+        "Audio languages to keep during Auto Remove Streams.",
+        "Send language names/codes separated by comma. Example: <code>tam,ta,tamil</code>. Empty means Auto Remove Streams will ask/skip instead of removing audio blindly.</i> \nâ”– <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "AUTO_KEEP_SUBTITLE_LANGS": (
+        "",
+        "Subtitle languages to keep during Auto Remove Streams.",
+        "Send language names/codes separated by comma. Example: <code>eng,en,english</code>. Empty means subtitles are not auto-filtered.</i> \nâ”– <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "AUTO_AUDIO_ORDER": (
+        "",
+        "Audio language order for Auto Process.",
+        "Send language short codes separated by spaces. Example: <code>tam tel eng</code>.\n<b>Time Left:</b> <code>60 sec</code>",
+    ),
+    "AUTO_SUBTITLE_ORDER": (
+        "",
+        "Subtitle language order for Auto Process.",
+        "Send subtitle language short codes separated by spaces. Example: <code>eng tam</code>.\n<b>Time Left:</b> <code>60 sec</code>",
+    ),
+    "AUTO_MERGE_FILENAME": (
+        "",
+        "Optional basename/template for Auto Merge output.",
+        "Send a merge filename template. Example: <code>{title} {resolution} {bit}</code>. The bot adds <code>[S1-EP(01-06)]</code> automatically.</i> \nâ”– <b>Time Left :</b> <code>60 sec</code>",
     ),
     "RCLONE_PATH": (
         "",
@@ -291,8 +367,8 @@ Here I will explain how to use mltb.* which is reference to files you want to wo
     ),
     "lremname_auto": (
         "AutoRename Template",
-        "AutoRename Template uses tags to automatically rename files based on metadata like title, season, episode, quality.",
-        "Send AutoRename Template.\n<b>Tags:</b> <code>{title} {season} {episode} {quality} {chapter}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>{title} S{season}E{episode} {quality}</code>\n<b>Timeout:</b> 60 sec",
+        "AutoRename Template uses filename, caption, media metadata, TMDb, and AniList lookup.",
+        "Send AutoRename Template.\n<b>Variables:</b> <code>{file_name} {file_size} {file_caption} {languages} {subtitles} {duration} {ott} {resolution} {name} {title} {year} {quality} {season} {episode} {audio} {lib} {extension} {shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} {acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} {dynamic_range} {release_group} {group}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n<b>Timeout:</b> 60 sec",
     ),
     "lremname_regex": (
         "Regex Remname",
@@ -316,8 +392,9 @@ async def get_user_settings(from_user, stype="main"):
         )
         buttons.data_button("Mirror Settings", f"userset {user_id} mirror")
         buttons.data_button("Leech Settings", f"userset {user_id} leech")
-        buttons.data_button("Uphoster Settings", f"userset {user_id} uphoster")
+        buttons.data_button("Auto Process", f"userset {user_id} autoprocess")
         buttons.data_button("FF Media Settings", f"userset {user_id} ffset")
+        buttons.data_button("User Settings Zip", f"userset {user_id} zip")
         buttons.data_button(
             "Mics Settings", f"userset {user_id} advanced", position="l_body"
         )
@@ -369,6 +446,7 @@ async def get_user_settings(from_user, stype="main"):
             f"Swap to {trr} token/config",
             f"userset {user_id} tog USER_TOKENS {'f' if user_tokens else 't'}",
         )
+        buttons.data_button("Helper Token Settings", f"userset {user_id} userbot")
 
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
@@ -389,7 +467,156 @@ async def get_user_settings(from_user, stype="main"):
 ┖ <b>yt Cookies Mode</b> → <b>{cookie_mode}</b>
 """
 
+    elif stype == "userbot":
+        pin_required = config_bool(Config.HELPER_TOKEN_PIN_REQUIRED, True)
+        pin_set = starfallx_upload.pin_is_set(user_id)
+        unlocked = starfallx_upload.pin_unlocked(user_id)
+        if pin_required and not pin_set:
+            buttons.data_button("Set PIN", f"userset {user_id} helperpinset")
+            text = """<b>StarFallX Helper Token Settings</b>
+
+Set a PIN before adding helper bot tokens.
+Tokens are masked in settings and backup zip."""
+        elif pin_required and not unlocked:
+            buttons.data_button("Unlock PIN", f"userset {user_id} helperunlock")
+            text = """<b>StarFallX Helper Token Settings</b>
+
+PIN lock is enabled.
+Unlock to view, add, test, remove, or export helper token data."""
+        else:
+            buttons.data_button("Token List", f"userset {user_id} userbot")
+            buttons.data_button("Backup Token List", f"userset {user_id} userbot")
+            buttons.data_button("Add Token", f"userset {user_id} helperadd")
+            buttons.data_button("Test Tokens", f"userset {user_id} helpertest")
+            buttons.data_button("Remove Token", f"userset {user_id} helperremove")
+            buttons.data_button("Set Primary", f"userset {user_id} helpersetprimary")
+            buttons.data_button("Token Status", f"userset {user_id} userbot")
+            if pin_required:
+                buttons.data_button("Lock PIN", f"userset {user_id} helperlock")
+            text = starfallx_upload.format_user_status(user_id)
+        buttons.data_button("Back", f"userset {user_id} general", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(1)
+
     elif stype == "leech":
+        def enabled(key):
+            return bool(
+                user_dict.get(key, False)
+                or key not in user_dict
+                and getattr(Config, key, False)
+            )
+
+        def tick(key):
+            return "✅ " if enabled(key) else ""
+
+        thumbpath = f"thumbnails/{user_id}.jpg"
+        thumbmsg = "Exists" if await aiopath.exists(thumbpath) else "Not Exists"
+        split_size = user_dict.get("LEECH_SPLIT_SIZE") or Config.LEECH_SPLIT_SIZE
+        leech_dest = (
+            user_dict.get("LEECH_DUMP_CHAT")
+            or (Config.LEECH_DUMP_CHAT if "LEECH_DUMP_CHAT" not in user_dict else "")
+            or "None"
+        )
+        lprefix = (
+            user_dict.get("LEECH_PREFIX")
+            or (Config.LEECH_PREFIX if "LEECH_PREFIX" not in user_dict else "")
+            or "Not Exists"
+        )
+        lsuffix = (
+            user_dict.get("LEECH_SUFFIX")
+            or (Config.LEECH_SUFFIX if "LEECH_SUFFIX" not in user_dict else "")
+            or "Not Exists"
+        )
+        lcap = (
+            user_dict.get("LEECH_CAPTION")
+            or (Config.LEECH_CAPTION if "LEECH_CAPTION" not in user_dict else "")
+            or "Not Exists"
+        )
+        thumb_layout = (
+            user_dict.get("THUMBNAIL_LAYOUT")
+            or (Config.THUMBNAIL_LAYOUT if "THUMBNAIL_LAYOUT" not in user_dict else "")
+            or "None"
+        )
+        lremname_auto = (
+            user_dict.get("lremname_auto")
+            or Config.LEECH_FILENAME_REMNAME_AUTO
+            or "Not Set"
+        )
+        subtitle_target = (
+            user_dict.get("SUBTITLE_TRANSLATE_TARGET")
+            or Config.SUBTITLE_TRANSLATE_TARGET
+            or "en"
+        )
+        intro_subtitle = (
+            user_dict.get("INTRO_SUBTITLE_TEXT")
+            or Config.INTRO_SUBTITLE_TEXT
+            or "Not Set"
+        )
+        font_value = user_dict.get("LEECH_FONT", Config.LEECH_FONT) or ""
+        font_label = {"": "Normal", "b": "Bold", "i": "Italic"}.get(font_value, font_value)
+        ltype = "DOCUMENT" if enabled("AS_DOCUMENT") else "MEDIA"
+        auto_thumb = "Enabled" if enabled("AUTO_THUMBNAIL") else "Disabled"
+        autorename_status = "Enabled" if enabled("AUTORENAME") else "Disabled"
+        complete_msg = "Enabled" if enabled("LEECH_COMPLETE_MSG") else "Disabled"
+        sequential_leech = "Enabled" if enabled("SEQUENTIAL_LEECH") else "Disabled"
+
+        buttons.data_button("Thumbnail", f"userset {user_id} menu THUMBNAIL")
+        buttons.data_button("Leech Split Size", f"userset {user_id} menu LEECH_SPLIT_SIZE")
+        buttons.data_button("Leech Destination", f"userset {user_id} menu LEECH_DUMP_CHAT")
+        buttons.data_button("Leech Prefix", f"userset {user_id} menu LEECH_PREFIX")
+        buttons.data_button("Leech Suffix", f"userset {user_id} menu LEECH_SUFFIX")
+        buttons.data_button("Leech Caption", f"userset {user_id} menu LEECH_CAPTION")
+        buttons.data_button("Thumbnail Layout", f"userset {user_id} menu THUMBNAIL_LAYOUT")
+        buttons.data_button(
+            f"{tick('AS_DOCUMENT')}Send As Document",
+            f"userset {user_id} tog AS_DOCUMENT {'f' if enabled('AS_DOCUMENT') else 't'}",
+        )
+        buttons.data_button(
+            f"{tick('AUTO_THUMBNAIL')}Auto Thumbnail",
+            f"userset {user_id} tog AUTO_THUMBNAIL {'f' if enabled('AUTO_THUMBNAIL') else 't'}",
+        )
+        buttons.data_button(
+            f"{tick('AUTORENAME')}AutoRename",
+            f"userset {user_id} tog AUTORENAME {'f' if enabled('AUTORENAME') else 't'}",
+        )
+        buttons.data_button("AutoRename Template", f"userset {user_id} menu lremname_auto")
+        buttons.data_button(
+            f"{tick('LEECH_COMPLETE_MSG')}Complete Msg",
+            f"userset {user_id} tog LEECH_COMPLETE_MSG {'f' if enabled('LEECH_COMPLETE_MSG') else 't'}",
+        )
+        buttons.data_button(
+            f"{tick('SEQUENTIAL_LEECH')}Sequential Leech",
+            f"userset {user_id} tog SEQUENTIAL_LEECH {'f' if enabled('SEQUENTIAL_LEECH') else 't'}",
+        )
+        buttons.data_button(f"Caption Font ({font_label})", f"userset {user_id} font")
+        buttons.data_button("Subtitle Target", f"userset {user_id} menu SUBTITLE_TRANSLATE_TARGET")
+        buttons.data_button("Intro Subtitle", f"userset {user_id} menu INTRO_SUBTITLE_TEXT")
+        buttons.data_button("Back", f"userset {user_id} back", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(2)
+
+        text = f"""<b>Leech Settings</b>
+Name: {user_name}
+
+Leech Type: <b>{ltype}</b>
+Custom Thumbnail: <b>{thumbmsg}</b>
+Leech Split Size: <b>{get_readable_file_size(split_size)}</b>
+Leech Destination: <code>{escape(str(leech_dest))}</code>
+Leech Prefix: <code>{escape(lprefix)}</code>
+Leech Suffix: <code>{escape(lsuffix)}</code>
+Leech Caption: <code>{escape(lcap)}</code>
+Caption Font: <b>{font_label}</b>
+Complete Msg: <b>{complete_msg}</b>
+Sequential Leech: <b>{sequential_leech}</b>
+Thumbnail Layout: <b>{thumb_layout}</b>
+Auto Thumbnail: <b>{auto_thumb}</b>
+AutoRename: <b>{autorename_status}</b>
+AutoRename Template: <code>{escape(lremname_auto)}</code>
+Subtitle Target: <code>{escape(subtitle_target)}</code>
+Intro Subtitle: <code>{escape(intro_subtitle)}</code>
+"""
+
+    elif stype == "leech_old":
         thumbpath = f"thumbnails/{user_id}.jpg"
         buttons.data_button("Thumbnail", f"userset {user_id} menu THUMBNAIL")
         thumbmsg = "Exists" if await aiopath.exists(thumbpath) else "Not Exists"
@@ -573,6 +800,15 @@ async def get_user_settings(from_user, stype="main"):
         )
         lremname_regex = user_dict.get("lremname_regex") or Config.LEECH_FILENAME_REMNAME_REGEX or "Not Set"
 
+        buttons.data_button(
+            "Subtitle Target", f"userset {user_id} menu SUBTITLE_TRANSLATE_TARGET"
+        )
+        subtitle_target = user_dict.get("SUBTITLE_TRANSLATE_TARGET") or Config.SUBTITLE_TRANSLATE_TARGET or "en"
+
+        buttons.data_button(
+            "Intro Subtitle", f"userset {user_id} menu INTRO_SUBTITLE_TEXT"
+        )
+        intro_subtitle = user_dict.get("INTRO_SUBTITLE_TEXT") or Config.INTRO_SUBTITLE_TEXT or "Not Set"
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(2)
@@ -596,7 +832,91 @@ async def get_user_settings(from_user, stype="main"):
 ┠ AutoRename → <b>{autorename_status}</b>
 ┠ Rename Method → <b>{rename_method}</b>
 ┠ AutoRename Template → <code>{escape(lremname_auto)}</code>
-┖ Regex Remname → <code>{escape(lremname_regex)}</code>
+┠ Regex Remname → <code>{escape(lremname_regex)}</code>
+┠ Subtitle Target → <code>{escape(subtitle_target)}</code>
+┖ Intro Subtitle → <code>{escape(intro_subtitle)}</code>
+"""
+
+    elif stype == "autoprocess":
+        def enabled(key):
+            return bool(
+                user_dict.get(key, False)
+                or key not in user_dict
+                and getattr(Config, key, False)
+            )
+
+        toggles = [
+            ("AUTO_PROCESS", "Auto Process"),
+            ("AUTO_LEECH", "Auto Leech"),
+            ("AUTO_UNZIP", "Auto Unzip"),
+            ("AUTO_REMOVE_STREAMS", "Auto Remove Streams"),
+            ("AUTO_MERGE", "Auto Merge"),
+            ("AUTO_INTRO_SUBTITLE", "Intro Subtitle"),
+        ]
+        status_lines = []
+        for key, label in toggles:
+            state = enabled(key)
+            buttons.data_button(
+                f"{'🟢' if state else '⚪'} {label}",
+                f"userset {user_id} tog {key} {'f' if state else 't'}",
+            )
+            status_lines.append(f"• {label}: <b>{'On' if state else 'Off'}</b>")
+
+        buttons.data_button(
+            "Keep Audios", f"userset {user_id} menu AUTO_KEEP_AUDIO_LANGS"
+        )
+        buttons.data_button(
+            "Keep Subtitles", f"userset {user_id} menu AUTO_KEEP_SUBTITLE_LANGS"
+        )
+        buttons.data_button(
+            "Audios Order", f"userset {user_id} menu AUTO_AUDIO_ORDER"
+        )
+        buttons.data_button(
+            "Subtitles Order", f"userset {user_id} menu AUTO_SUBTITLE_ORDER"
+        )
+        buttons.data_button(
+            "Merge Filename", f"userset {user_id} menu AUTO_MERGE_FILENAME"
+        )
+        buttons.data_button(
+            "Intro Ranges", f"userset {user_id} menu INTRO_SUBTITLE_RANGES"
+        )
+
+        keep_audio = user_dict.get("AUTO_KEEP_AUDIO_LANGS") or Config.AUTO_KEEP_AUDIO_LANGS or "Not Set"
+        keep_sub = user_dict.get("AUTO_KEEP_SUBTITLE_LANGS") or Config.AUTO_KEEP_SUBTITLE_LANGS or "Not Set"
+        audio_order = user_dict.get("AUTO_AUDIO_ORDER") or Config.AUTO_AUDIO_ORDER or "Default"
+        sub_order = user_dict.get("AUTO_SUBTITLE_ORDER") or Config.AUTO_SUBTITLE_ORDER or "Default"
+        merge_name = user_dict.get("AUTO_MERGE_FILENAME") or Config.AUTO_MERGE_FILENAME or "Detected title"
+        intro_ranges = user_dict.get("INTRO_SUBTITLE_RANGES") or Config.INTRO_SUBTITLE_RANGES or "Not Set"
+
+        buttons.data_button("Back", f"userset {user_id} back", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(2)
+
+        text = f"""âŒ¬ <b>Auto Process :</b>
+â”Ÿ <b>Name</b> â†’ {user_name}
+â”ƒ
+{chr(10).join(status_lines)}
+â”  Keep Audio â†’ <code>{escape(str(keep_audio))}</code>
+â”  Keep Subtitles â†’ <code>{escape(str(keep_sub))}</code>
+â”– Merge Filename â†’ <code>{escape(str(merge_name))}</code>
+
+Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
+
+<i>Order: download - unzip - remove streams - smart merge - intro subtitle - metadata - auto rename - sequential upload.</i>
+"""
+        text = f"""<b>Auto Process</b>
+<b>Name:</b> {user_name}
+
+{chr(10).join(status_lines)}
+
+Keep Audios: <code>{escape(str(keep_audio))}</code>
+Keep Subtitles: <code>{escape(str(keep_sub))}</code>
+Audios Order: <code>{escape(str(audio_order))}</code>
+Subtitles Order: <code>{escape(str(sub_order))}</code>
+Merge Filename: <code>{escape(str(merge_name))}</code>
+Intro Ranges: <code>{escape(str(intro_ranges))}</code>
+
+<i>Order: download - unzip - remove streams/order tracks - smart merge - intro subtitle - metadata - auto rename - sequential upload.</i>
 """
 
     elif stype == "uphoster":
@@ -797,6 +1117,7 @@ async def get_user_settings(from_user, stype="main"):
             sd_msg = "Disabled"
 
         buttons.data_button("YT Up Tools", f"userset {user_id} yttools")
+        buttons.data_button("Uphoster Tools", f"userset {user_id} uphoster")
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(1)
@@ -813,9 +1134,6 @@ async def get_user_settings(from_user, stype="main"):
 """
 
     elif stype == "ffset":
-        buttons.data_button(
-            "FFmpeg Cmds", f"userset {user_id} menu FFMPEG_CMDS", "header"
-        )
         if user_dict.get("FFMPEG_CMDS", False):
             ffc = user_dict["FFMPEG_CMDS"]
         elif "FFMPEG_CMDS" not in user_dict and Config.FFMPEG_CMDS:
@@ -880,12 +1198,20 @@ async def get_user_settings(from_user, stype="main"):
         text = f"""⌬ <b>FF Settings :</b>
 ┟ <b>Name</b> → {user_name}
 ┃
-┠ <b>FFmpeg CLI Commands</b> → {ffc}
+┠ <b>FF Media CLI</b> → hidden
 ┃
 ┠ <b>Default Metadata</b> → {display_meta_val}
 ┠ <b>Audio Metadata</b> → {display_audio_meta}
 ┠ <b>Video Metadata</b> → {display_video_meta}
 ┖ <b>Subtitle Metadata</b> → {display_subtitle_meta}"""
+
+        text = f"""<b>FF Media Settings</b>
+<b>Name:</b> {user_name}
+
+Default Metadata: {display_meta_val}
+Audio Metadata: {display_audio_meta}
+Video Metadata: {display_video_meta}
+Subtitle Metadata: {display_subtitle_meta}"""
 
     elif stype == "advanced":
         buttons.data_button(
@@ -1083,6 +1409,11 @@ async def set_option(_, message, option, rfunc):
         if not value.isdigit():
             value = get_size_bytes(value)
         value = min(int(value), TgClient.MAX_SPLIT_SIZE)
+    elif option == "LEECH_FONT":
+        value = "" if value.strip().lower() in {"none", "normal", "off"} else value.strip().lower()
+        if value not in {"", "b", "i", "code"}:
+            await send_message(message, "Caption font must be b, i, code, or none.")
+            return
     # elif option == "LEECH_DUMP_CHAT": # TODO: Add
     elif option == "EXCLUDED_EXTENSIONS":
         fx = value.split()
@@ -1169,6 +1500,142 @@ async def set_option(_, message, option, rfunc):
     await database.update_user_data(user_id)
 
 
+def _reverse_autorename_template(sample):
+    stem = str(sample or "").strip()
+    if "." in stem:
+        stem = ".".join(stem.split(".")[:-1]) or stem
+    has_episode = bool(search(r"(?i)S\d{1,2}\s*E\d{1,3}", stem))
+    has_year = bool(search(r"\b(19\d{2}|20\d{2}|21\d{2})\b", stem))
+    has_resolution = bool(search(r"(?i)\b(2160p|1080p|720p|480p)\b", stem))
+    has_bit = bool(search(r"(?i)\b10\s*bit\b", stem))
+    has_ott = bool(search(r"(?i)\b(NF|AMZN|DSNP|JHS|IMAX|HBO|CR)\b", stem))
+    has_quality = bool(search(r"(?i)\b(WEB[- ]?DL|WEB[- ]?Rip|BluRay|HDRip|DS4K)\b", stem))
+    has_codec = bool(search(r"(?i)\b(x265|x264|h265|h264|hevc|av1)\b", stem))
+    has_audio = bool(search(r"(?i)\[(?:[^\]]*?(DDP|EAC3|AC3|AAC|DTS|TrueHD)[^\]]*?)\]", stem))
+    has_sub = bool(search(r"(?i)\b([EMS]?Sub|ESub|MSub)\b", stem))
+    has_group = bool(search(r"\s~\s*[\w.-]+$", stem))
+
+    parts = []
+    if has_episode:
+        parts.append("[S{season}E{episode}]")
+    parts.append("{name}")
+    if has_year:
+        parts.append("{year}")
+    if has_resolution:
+        parts.append("{resolution}")
+    if has_bit:
+        parts.append("{bit}")
+    if has_ott:
+        parts.append("{ott}")
+    if has_quality:
+        parts.append("{quality}")
+    if has_codec:
+        parts.append("{codec}")
+    if has_audio:
+        parts.append("[{languages}-{audio_codec} {audio_channels}]")
+    if has_sub:
+        parts.append("{shortsub}")
+    template = " ".join(parts)
+    if has_group:
+        template += " ~ {release_group}"
+    return template
+
+
+@new_task
+async def create_autorename_template(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    template = _reverse_autorename_template(message.text)
+    update_user_ldata(user_id, "lremname_auto", template)
+    await delete_message(message)
+    await send_message(
+        message,
+        "<b>Reverse AutoRename template saved</b>\n\n"
+        f"<code>{escape(template)}</code>",
+    )
+    await rfunc()
+    await database.update_user_data(user_id)
+
+
+async def _send_helper_error(message, text):
+    await send_message(message, f"Helper token error: <code>{escape(str(text))}</code>")
+
+
+@new_task
+async def set_helper_pin(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    try:
+        await starfallx_upload.set_pin(user_id, message.text)
+        await delete_message(message)
+        await send_message(message, "Helper Token PIN saved. Settings are unlocked for 15 minutes.")
+    except Exception as e:
+        await _send_helper_error(message, e)
+    await rfunc()
+
+
+@new_task
+async def unlock_helper_pin(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    if starfallx_upload.verify_pin(user_id, message.text):
+        await delete_message(message)
+        await send_message(message, "Helper Token Settings unlocked for 15 minutes.")
+    else:
+        await delete_message(message)
+        await send_message(message, "Wrong Helper Token PIN.")
+    await rfunc()
+
+
+@new_task
+async def add_helper_token(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    try:
+        info = await starfallx_upload.set_user_token(user_id, message.text)
+        await delete_message(message)
+        await send_message(
+            message,
+            f"Helper token saved: @{escape(str(info.get('username')))}\n"
+            "Add/keep this helper bot inside LEECH_DUMP_CHAT.",
+        )
+    except Exception as e:
+        await delete_message(message)
+        await _send_helper_error(message, e)
+    await rfunc()
+
+
+@new_task
+async def remove_helper_token(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    try:
+        removed = await starfallx_upload.remove_user_token(user_id, message.text)
+        await delete_message(message)
+        await send_message(message, f"Removed helper tokens: <b>{removed}</b>")
+    except Exception as e:
+        await delete_message(message)
+        await _send_helper_error(message, e)
+    await rfunc()
+
+
+@new_task
+async def set_primary_helper_token(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    try:
+        record = await starfallx_upload.set_primary_token(user_id, message.text)
+        await delete_message(message)
+        await send_message(
+            message,
+            f"Primary helper set: @{escape(str(record.get('username') or 'Not Tested'))}",
+        )
+    except Exception as e:
+        await delete_message(message)
+        await _send_helper_error(message, e)
+    await rfunc()
+
+
 async def get_menu(option, message, user_id):
     handler_dict[user_id] = False
     user_dict = user_data.get(user_id, {})
@@ -1186,9 +1653,11 @@ async def get_menu(option, message, user_id):
     else:
         key = "set"
     buttons.data_button(
-        "Change" if user_dict.get(option, False) else "Set",
+        "Set" if option == "lremname_auto" else ("Change" if user_dict.get(option, False) else "Set"),
         f"userset {user_id} {key} {option}",
     )
+    if option == "lremname_auto":
+        buttons.data_button("Create", f"userset {user_id} arcreate {option}", "header")
     if user_dict.get(option, False):
         if option == "THUMBNAIL":
             buttons.data_button(
@@ -1208,6 +1677,8 @@ async def get_menu(option, message, user_id):
             buttons.data_button("Remove", f"userset {user_id} remove {option}")
     if option in leech_options:
         back_to = "leech"
+    elif option in auto_process_options:
+        back_to = "autoprocess"
     elif option in rclone_options:
         back_to = "rclone"
     elif option in gdrive_options:
@@ -1312,6 +1783,28 @@ async def event_handler(client, query, pfunc, rfunc, photo=False, document=False
     client.remove_handler(*handler)
 
 
+async def send_user_settings_zip(message, user_id, user_dict):
+    safe_settings = dict(user_dict)
+    safe_settings.pop(HELPER_PIN_HASH_KEY, None)
+    if HELPER_TOKENS_KEY in safe_settings:
+        safe_settings[HELPER_TOKENS_KEY] = safe_helper_tokens(user_dict)
+    if USER_BOT_TOKEN_KEY in safe_settings:
+        safe_settings[USER_BOT_TOKEN_KEY] = safe_user_token_data(user_dict).get("token")
+    payload = {
+        "user_id": user_id,
+        "settings": safe_settings,
+    }
+    archive = BytesIO()
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "user_settings.json",
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        )
+    archive.seek(0)
+    archive.name = f"user_settings_{user_id}.zip"
+    await send_file(message, archive, "User settings backup")
+
+
 @new_task
 async def edit_user_settings(client, query):
     from_user = query.from_user
@@ -1331,10 +1824,31 @@ async def edit_user_settings(client, query):
         return await query.answer("Not Yours!", show_alert=True)
     elif data[2] == "setevent":
         await query.answer()
+    elif data[2] == "zip":
+        if (
+            config_bool(Config.HELPER_TOKEN_PIN_REQUIRED, True)
+            and user_dict.get(HELPER_TOKENS_KEY)
+            and not starfallx_upload.pin_unlocked(user_id)
+        ):
+            await query.answer("Unlock Helper Token PIN before export.", show_alert=True)
+            await update_user_settings(query, "userbot")
+            return
+        await query.answer("Preparing zip backup...")
+        await send_user_settings_zip(message, user_id, user_dict)
+    elif data[2] == "font":
+        await query.answer()
+        current = user_dict.get("LEECH_FONT", Config.LEECH_FONT) or ""
+        order = ["", "b", "i"]
+        next_value = order[(order.index(current) + 1) % len(order)] if current in order else ""
+        update_user_ldata(user_id, "LEECH_FONT", next_value)
+        await database.update_user_data(user_id)
+        await update_user_settings(query, "leech")
     elif data[2] in [
         "general",
         "mirror",
         "leech",
+        "userbot",
+        "autoprocess",
         "uphoster",
         "gofile",
         "buzzheavier",
@@ -1346,6 +1860,65 @@ async def edit_user_settings(client, query):
     ]:
         await query.answer()
         await update_user_settings(query, data[2])
+    elif data[2] in [
+        "helperpinset",
+        "helperunlock",
+        "helperadd",
+        "helperremove",
+        "helpersetprimary",
+    ]:
+        prompts = {
+            "helperpinset": "Send a new Helper Token PIN.\nTimeout: 60 sec",
+            "helperunlock": "Send your Helper Token PIN.\nTimeout: 60 sec",
+            "helperadd": "Send one helper bot token.\nExample: 123456:ABCDEF\nTimeout: 60 sec",
+            "helperremove": "Send token number, @username, bot id, or token id prefix to remove.\nTimeout: 60 sec",
+            "helpersetprimary": "Send token number, @username, bot id, or token id prefix to make primary.\nTimeout: 60 sec",
+        }
+        funcs = {
+            "helperpinset": set_helper_pin,
+            "helperunlock": unlock_helper_pin,
+            "helperadd": add_helper_token,
+            "helperremove": remove_helper_token,
+            "helpersetprimary": set_primary_helper_token,
+        }
+        if (
+            data[2] not in ["helperpinset", "helperunlock"]
+            and config_bool(Config.HELPER_TOKEN_PIN_REQUIRED, True)
+            and not starfallx_upload.pin_unlocked(user_id)
+        ):
+            await query.answer("Unlock Helper Token PIN first.", show_alert=True)
+            await update_user_settings(query, "userbot")
+            return
+        await query.answer()
+        buttons = ButtonMaker()
+        buttons.data_button("Stop", f"userset {user_id} userbot")
+        buttons.data_button("Back", f"userset {user_id} userbot", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        await edit_message(message, prompts[data[2]], buttons.build_menu(1))
+        rfunc = partial(update_user_settings, query, "userbot")
+        pfunc = partial(funcs[data[2]], rfunc=rfunc)
+        await event_handler(client, query, pfunc, rfunc)
+    elif data[2] == "helpertest":
+        if config_bool(Config.HELPER_TOKEN_PIN_REQUIRED, True) and not starfallx_upload.pin_unlocked(user_id):
+            await query.answer("Unlock Helper Token PIN first.", show_alert=True)
+            await update_user_settings(query, "userbot")
+            return
+        await query.answer("Testing helper tokens...")
+        results = await starfallx_upload.test_user_tokens(user_id)
+        if not results:
+            await send_message(message, "No helper tokens saved.")
+        else:
+            lines = ["<b>Helper Token Test</b>"]
+            for index, (record, ok, status) in enumerate(results, start=1):
+                username = record.get("username") or "Not Tested"
+                mark = "OK" if ok else "FAIL"
+                lines.append(f"{index}. @{escape(str(username))} -> {mark} ({status})")
+            await send_message(message, "\n".join(lines))
+        await update_user_settings(query, "userbot")
+    elif data[2] == "helperlock":
+        starfallx_upload.lock_pin(user_id)
+        await query.answer("Helper Token Settings locked.", show_alert=True)
+        await update_user_settings(query, "userbot")
     elif data[2] == "yttools":
         await query.answer()
         await update_user_settings(query, data[2])
@@ -1401,6 +1974,8 @@ async def edit_user_settings(client, query):
             back_to = "gdrive"
         elif data[3] in ["USER_TOKENS", "USE_DEFAULT_COOKIE"]:
             back_to = "general"
+        elif data[3].startswith("AUTO_"):
+            back_to = "autoprocess"
         else:
             back_to = "leech"
         await update_user_settings(query, stype=back_to)
@@ -1425,6 +2000,21 @@ async def edit_user_settings(client, query):
             photo=data[3] == "THUMBNAIL",
             document=data[3] != "THUMBNAIL",
         )
+    elif data[2] == "arcreate":
+        await query.answer()
+        buttons = ButtonMaker()
+        text = (
+            "Send one sample final filename.\n"
+            "Example: <code>[S01E08] Off Campus (2026) 1080p 10bit AMZN WEBRip x265 [Tamil-DDP 5.1] ESub ~ PSA.mkv</code>\n"
+            "<b>Time Left:</b> <code>60 sec</code>"
+        )
+        buttons.data_button("Stop", f"userset {user_id} menu {data[3]} stop")
+        buttons.data_button("Back", f"userset {user_id} menu {data[3]}", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        await edit_message(message, message.text.html + "\n\n" + text, buttons.build_menu(1))
+        rfunc = partial(get_menu, data[3], message, user_id)
+        pfunc = partial(create_autorename_template, rfunc=rfunc)
+        await event_handler(client, query, pfunc, rfunc)
     elif data[2] in ["set", "addone", "rmone"]:
         await query.answer()
         buttons = ButtonMaker()
@@ -1526,8 +2116,17 @@ async def get_users_settings(_, message):
     if user_data:
         for u, d in user_data.items():
             kmsg = f"\n<b>{u}:</b>\n"
+            def _safe_display(key, value):
+                if key == HELPER_PIN_HASH_KEY:
+                    return "PIN Set"
+                if key == HELPER_TOKENS_KEY:
+                    return safe_helper_tokens(d)
+                if key == USER_BOT_TOKEN_KEY:
+                    return safe_user_token_data(d).get("token")
+                return value
+
             if vmsg := "".join(
-                f"{k}: <code>{v or None}</code>\n" for k, v in d.items()
+                f"{k}: <code>{_safe_display(k, v) or None}</code>\n" for k, v in d.items()
             ):
                 msg += kmsg + vmsg
         if not msg:

@@ -2,6 +2,7 @@ from .bot_settings import send_bot_settings, edit_bot_settings
 from .cancel_task import cancel, cancel_multi, cancel_all_buttons, cancel_all_update
 from .chat_permission import authorize, unauthorize, add_sudo, remove_sudo
 from .clone import clone_node
+from .create_torrent import create_torrent
 from .exec import aioexecute, execute, clear
 from .file_selector import select, confirm_selection
 from .force_start import remove_from_queue
@@ -11,9 +12,12 @@ from .gd_search import gdrive_search, select_type
 from .help import arg_usage, bot_help
 from .mediainfo import mediainfo
 from .broadcast import broadcast
+from .big_queue_leech import bq_leech
+from .batch_leech import batch_leech
 from .mirror_leech import (
     mirror,
     leech,
+    auto_leech,
     qb_leech,
     qb_mirror,
     jd_leech,
@@ -39,6 +43,10 @@ from .status import task_status, status_pages
 from .users_settings import get_users_settings, edit_user_settings, send_user_settings
 from .ytdlp import ytdl, ytdl_leech
 from .video_tool_ui import video_tools_callback
+from ..helper.video_utils.video_tools import (
+    active_merge_track_filter,
+    video_tools_media_collector,
+)
 
 __all__ = [
     "send_bot_settings",
@@ -52,6 +60,7 @@ __all__ = [
     "add_sudo",
     "remove_sudo",
     "clone_node",
+    "create_torrent",
     "aioexecute",
     "execute",
     "hydra_search",
@@ -67,7 +76,10 @@ __all__ = [
     "uphoster",
     "mirror",
     "leech",
+    "auto_leech",
     "qb_leech",
+    "bq_leech",
+    "batch_leech",
     "qb_mirror",
     "jd_leech",
     "jd_mirror",
@@ -105,4 +117,6 @@ __all__ = [
     "ytdl",
     "ytdl_leech",
     "video_tools_callback",
+    "active_merge_track_filter",
+    "video_tools_media_collector",
 ]

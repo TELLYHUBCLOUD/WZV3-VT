@@ -35,6 +35,20 @@ async def cancel(_, message):
         else:
             task = await get_task_by_gid(gid)
             if task is None:
+                from .batch_task_registry import cancel_batch_controller
+
+                result = await cancel_batch_controller(
+                    gid, user_id, await CustomFilters.sudo("", message)
+                )
+                if result is True:
+                    await send_message(
+                        message,
+                        f"Batch controller <code>{gid}</code> cancelled. No next batch will start.",
+                    )
+                    return
+                if result is False:
+                    await send_message(message, "This task is not for you!")
+                    return
                 await send_message(message, f"GID: <code>{gid}</code> Not Found.")
                 return
     elif reply_to_id := message.reply_to_message_id:

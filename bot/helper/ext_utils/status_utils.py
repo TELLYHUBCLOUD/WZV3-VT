@@ -9,6 +9,10 @@ from ... import (
     DOWNLOAD_DIR,
     bot_cache,
     bot_start_time,
+    non_queued_dl,
+    non_queued_up,
+    queued_dl,
+    queued_up,
     status_dict,
     task_dict,
     task_dict_lock,
@@ -34,6 +38,7 @@ class MirrorStatus:
     STATUS_SAMVID = "SamVid"
     STATUS_CONVERT = "Convert"
     STATUS_FFMPEG = "FFmpeg"
+    STATUS_AUTOPROCESS = "AutoProcess"
     STATUS_YT = "YouTube"
     STATUS_METADATA = "Metadata"
 
@@ -45,7 +50,7 @@ class EngineStatus:
         self.STATUS_AIOHTTP = f"AioHttp v{ver.get('aiohttp', 'N/A')}"
         self.STATUS_GDAPI = f"Google-API v{ver.get('gapi', 'N/A')}"
         self.STATUS_QBIT = f"qBit v{ver.get('qBittorrent', 'N/A')}"
-        self.STATUS_TGRAM = f"Pyro v{ver.get('pyrotgfork', 'N/A')}"
+        self.STATUS_TGRAM = f"{Config.UPLOAD_ENGINE} v{Config.UPLOAD_ENGINE_VERSION}"
         self.STATUS_MEGA = f"MegaCMD v{ver.get('mega', 'N/A')}"
         self.STATUS_YTDLP = f"yt-dlp v{ver.get('yt-dlp', 'N/A')}"
         self.STATUS_FFMPEG = f"ffmpeg v{ver.get('ffmpeg', 'N/A')}"
@@ -73,6 +78,7 @@ STATUSES = {
     "SP": MirrorStatus.STATUS_SPLIT,
     "SV": MirrorStatus.STATUS_SAMVID,
     "FF": MirrorStatus.STATUS_FFMPEG,
+    "AP": MirrorStatus.STATUS_AUTOPROCESS,
     "PA": MirrorStatus.STATUS_PAUSED,
     "CK": MirrorStatus.STATUS_CHECK,
 }
@@ -200,6 +206,12 @@ def get_progress_bar_string(pct):
     p_str += "⬡" * (12 - cFull)
     return f"[{p_str}]"
 
+def get_progress_bar_string(pct):
+    pct = float(str(pct).strip("%"))
+    p = min(max(pct, 0), 100)
+    full = int(p // 8)
+    return f"[{'■' * full}{'□' * (12 - full)}]"
+
 
 async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=1):
     msg = ""
@@ -273,6 +285,12 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         else:
             msg += f"\n┠ <b>Size</b> → <i>{task.size()}</i>"
         msg += f"\n┠ <b>Engine</b> → <i>{task.engine}</i>"
+        upload_engine = getattr(task.listener, "upload_engine", "")
+        upload_client = getattr(task.listener, "upload_client", "")
+        if upload_engine:
+            msg += f"\n┠ <b>Upload Engine</b> → <i>{upload_engine}</i>"
+        if upload_client:
+            msg += f"\n┠ <b>Upload Client</b> → <i>{upload_client}</i>"
         msg += f"\n┠ <b>In Mode</b> → <i>{task.listener.mode[0]}</i>"
         msg += f"\n┠ <b>Out Mode</b> → <i>{task.listener.mode[1]}</i>"
         # TODO: Add Bt Sel
@@ -287,6 +305,11 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             msg = f"No Active {status} Tasks!\n\n"
 
     msg += "⌬ <b><u>Bot Stats</u></b>"
+    theme = str(Config.STATUS_THEME or "starfall").lower()
+    if theme == "compact":
+        msg = msg.replace("Bot Stats", "Bot Stats")
+    elif theme == "starfall":
+        msg = msg.replace("Bot Stats", "Starfall Status")
     buttons = ButtonMaker()
     if not is_user:
         buttons.data_button("📜 TStats", f"status {sid} ov", position="header")
@@ -301,8 +324,38 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         for label, status_value in list(STATUSES.items()):
             if status_value != status:
                 buttons.data_button(label, f"status {sid} st {status_value}")
-    buttons.data_button("♻️ Refresh", f"status {sid} ref", position="header")
+    buttons.data_button("🔴 Refresh", f"status {sid} ref", position="header")
+    for item in buttons.buttons["header"]:
+        if getattr(item, "callback_data", "") == f"status {sid} ref":
+            item.text = "🔴 Refresh"
     button = buttons.build_menu(8)
     msg += f"\n┟ <b>CPU</b> → {cpu_percent()}% | <b>F</b> → {get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)} [{round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%]"
     msg += f"\n┖ <b>RAM</b> → {virtual_memory().percent}% | <b>UP</b> → {get_readable_time(time() - bot_start_time)}"
+    active_count = len(non_queued_dl) + len(non_queued_up)
+    queue_count = len(queued_dl) + len(queued_up)
+    msg += f"\n<b>Active/Queued</b> -> {active_count}/{queue_count}"
+    try:
+        from .starfallx_upload import starfallx_upload
+
+        sfx = starfallx_upload.status_summary()
+        msg += (
+            f"\n<b>{sfx['engine']}</b> -> Helpers {sfx['helper_active']}"
+            f" | Ready {sfx.get('ready', 0)} | Main {sfx['main_active']}"
+            f" | Cooling {sfx['cooling']}"
+        )
+    except Exception:
+        pass
+    cleanup = {
+        "\u00e2\u201d\u2013": "-",
+        "\u00e2\u201d\u0178": "-",
+        "\u00e2\u201d\u00a0": "-",
+        "\u00e2\u2020\u2019": ":",
+        "\u00e2\u0152\u00ac": "",
+        "\u00e2\u00ac\u00a2": "■",
+        "\u00e2\u00ac\u00a1": "□",
+        "\u00f0\u0178\u201d\u00b4": "🔴",
+        "\u00f0\u0178\u201c\u0153": "",
+    }
+    for bad, good in cleanup.items():
+        msg = msg.replace(bad, good)
     return msg, button

@@ -1,6 +1,6 @@
 import re
 from contextlib import suppress
-from PIL import Image
+from PIL import Image, ImageOps
 from hashlib import md5
 from aiofiles.os import remove, path as aiopath, makedirs
 import json
@@ -18,11 +18,15 @@ from time import time
 from aioshutil import rmtree
 from langcodes import Language
 
-from ... import LOGGER, DOWNLOAD_DIR, threads, cores
+from ... import LOGGER, DOWNLOAD_DIR
 from ...core.config_manager import BinConfig, Config
 from .bot_utils import cmd_exec, sync_to_async
+from .ffmpeg_queue import ffmpeg_task
 from .files_utils import get_mime_type, is_archive, is_archive_split
-from .status_utils import time_to_seconds
+from .performance import get_ffmpeg_cores, get_ffmpeg_threads
+from .status_utils import get_readable_file_size, get_readable_time, time_to_seconds
+
+_metadata_cache = {}
 
 
 def get_md5_hash(up_path):
@@ -47,7 +51,7 @@ async def create_thumb(msg, _id=""):
     return output
 
 
-async def download_image_thumb(url):
+async def download_image_thumb(url, landscape=False):
     """Download an image from a URL and save it as a JPEG thumbnail.
 
     Validates that the URL points to an image via Content-Type header check.
@@ -102,7 +106,17 @@ async def download_image_thumb(url):
             output = ospath.join(path, f"{time()}.jpg")
             def _process_thumb(src, dst):
                 with Image.open(src) as im:
-                    im.convert("RGB").save(dst, "JPEG", quality=95, optimize=True)
+                    im = im.convert("RGB")
+                    if landscape:
+                        im = ImageOps.fit(
+                            im,
+                            (1280, 720),
+                            method=Image.Resampling.LANCZOS,
+                            centering=(0.5, 0.5),
+                        )
+                    im.save(
+                        dst, "JPEG", quality=_thumb_quality(), optimize=True
+                    )
             try:
                 await sync_to_async(_process_thumb, tmp_path, output)
             except Exception as e:
@@ -276,7 +290,7 @@ async def take_ss(video_file, ss_nb) -> bool:
             cmd = [
                 "taskset",
                 "-c",
-                f"{cores}",
+                get_ffmpeg_cores(),
                 BinConfig.FFMPEG_NAME,
                 "-hide_banner",
                 "-loglevel",
@@ -290,19 +304,21 @@ async def take_ss(video_file, ss_nb) -> bool:
                 "-frames:v",
                 "1",
                 "-threads",
-                f"{threads}",
+                str(get_ffmpeg_threads()),
                 output,
             ]
             cap_time += interval
-            cmds.append(cmd_exec(cmd))
+            cmds.append(cmd)
         try:
-            resutls = await wait_for(gather(*cmds), timeout=60)
-            if resutls[0][2] != 0:
-                LOGGER.error(
-                    f"Error while creating screenshots from video. Path: {video_file}. stderr: {resutls[0][1]}"
-                )
-                await rmtree(dirpath, ignore_errors=True)
-                return False
+            async with ffmpeg_task(label="Screenshot generation"):
+                for cmd in cmds:
+                    result = await wait_for(cmd_exec(cmd), timeout=60)
+                    if result[2] != 0:
+                        LOGGER.error(
+                            f"Error while creating screenshots from video. Path: {video_file}. stderr: {result[1]}"
+                        )
+                        await rmtree(dirpath, ignore_errors=True)
+                        return False
         except Exception:
             LOGGER.error(
                 f"Error while creating screenshots from video. Path: {video_file}. Error: Timeout some issues with ffmpeg with specific arch!"
@@ -322,7 +338,7 @@ async def get_audio_thumbnail(audio_file):
     cmd = [
         "taskset",
         "-c",
-        f"{cores}",
+        get_ffmpeg_cores(),
         BinConfig.FFMPEG_NAME,
         "-hide_banner",
         "-loglevel",
@@ -333,11 +349,12 @@ async def get_audio_thumbnail(audio_file):
         "-vcodec",
         "copy",
         "-threads",
-        f"{threads}",
+        str(get_ffmpeg_threads()),
         output,
     ]
     try:
-        _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
+        async with ffmpeg_task(label="Audio thumbnail"):
+            _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
         if code != 0 or not await aiopath.exists(output):
             LOGGER.error(
                 f"Error while extracting thumbnail from audio. Name: {audio_file} stderr: {err}"
@@ -359,11 +376,11 @@ async def get_video_thumbnail(video_file, duration):
         duration = (await get_media_info(video_file))[0]
     if duration == 0:
         duration = 3
-    duration = duration // 2
+    duration = max(1, duration // 10)
     cmd = [
         "taskset",
         "-c",
-        f"{cores}",
+        get_ffmpeg_cores(),
         BinConfig.FFMPEG_NAME,
         "-hide_banner",
         "-loglevel",
@@ -379,16 +396,23 @@ async def get_video_thumbnail(video_file, duration):
         "-frames:v",
         "1",
         "-threads",
-        f"{threads}",
+        str(get_ffmpeg_threads()),
         output,
     ]
     try:
-        _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
+        async with ffmpeg_task(label="Video thumbnail"):
+            _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
         if code != 0 or not await aiopath.exists(output):
             LOGGER.error(
                 f"Error while extracting thumbnail from video. Name: {video_file} stderr: {err}"
             )
             return None
+        def _optimize_thumb(path):
+            with Image.open(path) as im:
+                im.convert("RGB").save(
+                    path, "JPEG", quality=_thumb_quality(), optimize=True
+                )
+        await sync_to_async(_optimize_thumb, output)
     except Exception:
         LOGGER.error(
             f"Error while extracting thumbnail from video. Name: {video_file}. Error: Timeout some issues with ffmpeg with specific arch!"
@@ -416,7 +440,7 @@ async def get_multiple_frames_thumbnail(video_file, layout, keep_screenshots):
     cmd = [
         "taskset",
         "-c",
-        f"{cores}",
+        get_ffmpeg_cores(),
         BinConfig.FFMPEG_NAME,
         "-hide_banner",
         "-loglevel",
@@ -434,11 +458,12 @@ async def get_multiple_frames_thumbnail(video_file, layout, keep_screenshots):
         "-f",
         "mjpeg",
         "-threads",
-        f"{threads}",
+        str(get_ffmpeg_threads()),
         output,
     ]
     try:
-        _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
+        async with ffmpeg_task(label="Contact sheet"):
+            _, err, code = await wait_for(cmd_exec(cmd), timeout=60)
         if code != 0 or not await aiopath.exists(output):
             LOGGER.error(
                 f"Error while combining thumbnails for video. Name: {video_file} stderr: {err}"
@@ -463,6 +488,7 @@ class FFMpeg:
         self._processed_time = 0
         self._last_processed_time = 0
         self._speed_raw = 0
+        self._speed_text = ""
         self._progress_raw = 0
         self._total_time = 0
         self._eta_raw = 0
@@ -490,6 +516,7 @@ class FFMpeg:
         self._processed_bytes = 0
         self._processed_time = 0
         self._speed_raw = 0
+        self._speed_text = ""
         self._progress_raw = 0
         self._eta_raw = 0
         self._time_rate = 0.1
@@ -518,6 +545,7 @@ class FFMpeg:
                             time() - self._start_time
                         )
                     elif key == "speed":
+                        self._speed_text = value
                         self._time_rate = max(0.1, float(value.strip("x")))
                     elif key == "out_time":
                         self._processed_time = (
@@ -579,11 +607,12 @@ class FFMpeg:
             ffmpeg[index] = output
         if self._listener.is_cancelled:
             return False
-        self._listener.subproc = await create_subprocess_exec(
-            *ffmpeg, stdout=PIPE, stderr=PIPE
-        )
-        await self._ffmpeg_progress()
-        _, stderr = await self._listener.subproc.communicate()
+        async with ffmpeg_task(self._listener, "Custom FFmpeg"):
+            self._listener.subproc = await create_subprocess_exec(
+                *ffmpeg, stdout=PIPE, stderr=PIPE
+            )
+            await self._ffmpeg_progress()
+            _, stderr = await self._listener.subproc.communicate()
         code = self._listener.subproc.returncode
         if self._listener.is_cancelled:
             return False
@@ -614,7 +643,7 @@ class FFMpeg:
             cmd = [
                 "taskset",
                 "-c",
-                f"{cores}",
+                get_ffmpeg_cores(),
                 BinConfig.FFMPEG_NAME,
                 "-hide_banner",
                 "-loglevel",
@@ -630,7 +659,7 @@ class FFMpeg:
                 "-c:a",
                 "aac",
                 "-threads",
-                f"{threads}",
+                str(get_ffmpeg_threads()),
                 output,
             ]
             if ext == "mp4":
@@ -643,7 +672,7 @@ class FFMpeg:
             cmd = [
                 "taskset",
                 "-c",
-                f"{cores}",
+                get_ffmpeg_cores(),
                 BinConfig.FFMPEG_NAME,
                 "-hide_banner",
                 "-loglevel",
@@ -657,16 +686,17 @@ class FFMpeg:
                 "-c",
                 "copy",
                 "-threads",
-                f"{threads}",
+                str(get_ffmpeg_threads()),
                 output,
             ]
         if self._listener.is_cancelled:
             return False
-        self._listener.subproc = await create_subprocess_exec(
-            *cmd, stdout=PIPE, stderr=PIPE
-        )
-        await self._ffmpeg_progress()
-        _, stderr = await self._listener.subproc.communicate()
+        async with ffmpeg_task(self._listener, "Video convert"):
+            self._listener.subproc = await create_subprocess_exec(
+                *cmd, stdout=PIPE, stderr=PIPE
+            )
+            await self._ffmpeg_progress()
+            _, stderr = await self._listener.subproc.communicate()
         code = self._listener.subproc.returncode
         if self._listener.is_cancelled:
             return False
@@ -697,7 +727,7 @@ class FFMpeg:
         cmd = [
             "taskset",
             "-c",
-            f"{cores}",
+            get_ffmpeg_cores(),
             BinConfig.FFMPEG_NAME,
             "-hide_banner",
             "-loglevel",
@@ -707,16 +737,17 @@ class FFMpeg:
             "-i",
             audio_file,
             "-threads",
-            f"{threads}",
+            str(get_ffmpeg_threads()),
             output,
         ]
         if self._listener.is_cancelled:
             return False
-        self._listener.subproc = await create_subprocess_exec(
-            *cmd, stdout=PIPE, stderr=PIPE
-        )
-        await self._ffmpeg_progress()
-        _, stderr = await self._listener.subproc.communicate()
+        async with ffmpeg_task(self._listener, "Audio convert"):
+            self._listener.subproc = await create_subprocess_exec(
+                *cmd, stdout=PIPE, stderr=PIPE
+            )
+            await self._ffmpeg_progress()
+            _, stderr = await self._listener.subproc.communicate()
         code = self._listener.subproc.returncode
         if self._listener.is_cancelled:
             return False
@@ -770,7 +801,7 @@ class FFMpeg:
         cmd = [
             "taskset",
             "-c",
-            f"{cores}",
+            get_ffmpeg_cores(),
             BinConfig.FFMPEG_NAME,
             "-hide_banner",
             "-loglevel",
@@ -790,17 +821,18 @@ class FFMpeg:
             "-c:a",
             "aac",
             "-threads",
-            f"{threads}",
+            str(get_ffmpeg_threads()),
             output_file,
         ]
 
         if self._listener.is_cancelled:
             return False
-        self._listener.subproc = await create_subprocess_exec(
-            *cmd, stdout=PIPE, stderr=PIPE
-        )
-        await self._ffmpeg_progress()
-        _, stderr = await self._listener.subproc.communicate()
+        async with ffmpeg_task(self._listener, "Sample video"):
+            self._listener.subproc = await create_subprocess_exec(
+                *cmd, stdout=PIPE, stderr=PIPE
+            )
+            await self._ffmpeg_progress()
+            _, stderr = await self._listener.subproc.communicate()
         code = self._listener.subproc.returncode
         if self._listener.is_cancelled:
             return False
@@ -830,11 +862,11 @@ class FFMpeg:
         start_time = 0
         i = 1
         while i <= parts or start_time < duration - 4:
-            out_path = f_path.replace(file_, f"{base_name}.part{i:03}{extension}")
+            out_path = f_path.replace(file_, f"{base_name}.part{i:02}{extension}")
             cmd = [
                 "taskset",
                 "-c",
-                f"{cores}",
+                get_ffmpeg_cores(),
                 BinConfig.FFMPEG_NAME,
                 "-hide_banner",
                 "-loglevel",
@@ -858,7 +890,7 @@ class FFMpeg:
                 "-c",
                 "copy",
                 "-threads",
-                f"{threads}",
+                str(get_ffmpeg_threads()),
                 out_path,
             ]
             if not multi_streams:
@@ -866,11 +898,12 @@ class FFMpeg:
                 del cmd[15]
             if self._listener.is_cancelled:
                 return False
-            self._listener.subproc = await create_subprocess_exec(
-                *cmd, stdout=PIPE, stderr=PIPE
-            )
-            await self._ffmpeg_progress()
-            _, stderr = await self._listener.subproc.communicate()
+            async with ffmpeg_task(self._listener, "Video split"):
+                self._listener.subproc = await create_subprocess_exec(
+                    *cmd, stdout=PIPE, stderr=PIPE
+                )
+                await self._ffmpeg_progress()
+                _, stderr = await self._listener.subproc.communicate()
             code = self._listener.subproc.returncode
             if self._listener.is_cancelled:
                 return False
@@ -924,8 +957,804 @@ class FFMpeg:
         return True
 
 
+def _clean_rename_token(value):
+    value = str(value or "").replace("_", " ").replace(".", " ")
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" -._")
+
+
+class _SafeFormatDict(dict):
+    def __missing__(self, key):
+        return ""
+
+
+def _thumb_quality():
+    try:
+        quality = int(Config.AUTO_THUMBNAIL_QUALITY)
+    except (TypeError, ValueError):
+        quality = 95
+    return max(1, min(quality, 100))
+
+
+def _sanitize_filename(name, fallback):
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(name or ""))
+    name = re.sub(r"\s+", " ", name).strip(" .-_")
+    if not name:
+        return fallback
+
+    ext = Path(name).suffix or Path(fallback).suffix
+    stem = name[: -len(ext)] if ext and name.lower().endswith(ext.lower()) else name
+    stem = stem.strip(" .-_") or Path(fallback).stem
+    max_stem_len = max(1, 255 - len(ext))
+    return f"{stem[:max_stem_len].strip(' .-_')}{ext}"
+
+
+def _normalize_resolution(value):
+    if not value:
+        return ""
+    value = value.lower()
+    if value == "4k":
+        return "2160p"
+    return value.replace("p", "") + "p" if value.endswith("p") else value
+
+
+def _extract_source_quality(filename):
+    quality_patterns = [
+        (r"\bDS4K\b", "DS4K"),
+        (r"\bWEB[-\s.]?DL\b", "WEB-DL"),
+        (r"\bWEB[-\s.]?Rip\b", "WEBRip"),
+        (r"\bBlu[-\s.]?Ray\b", "BluRay"),
+        (r"\bBD[-\s.]?Rip\b", "BDRip"),
+        (r"\bBR[-\s.]?Rip\b", "BRRip"),
+        (r"\bHDRip\b", "HDRip"),
+        (r"\bHDTV\b", "HDTV"),
+        (r"\bDVDRip\b", "DVDRip"),
+        (r"\bCAMRip\b|\bCAM\b", "CAMRip"),
+        (r"\bTeleSync\b|\bTS\b", "TS"),
+        (r"\bRemux\b", "REMUX"),
+    ]
+    for pattern, label in quality_patterns:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return label
+    return ""
+
+
+def _extract_dynamic_range(filename):
+    patterns = [
+        (r"\bDV\b|\bDolby[\s._-]?Vision\b", "DV"),
+        (r"\bHDR10\+\b", "HDR10+"),
+        (r"\bHDR10\b", "HDR10"),
+        (r"\bHDR\b", "HDR"),
+        (r"\bSDR\b", "SDR"),
+    ]
+    for pattern, label in patterns:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return label
+    return ""
+
+
+def _extract_codec_tag(filename):
+    patterns = [
+        (r"\b(?:HEVC|H\.?265|x265|h265)\b", "×265"),
+        (r"\b(?:AVC|H\.?264|x264|h264)\b", "×264"),
+        (r"\bAV1\b", "AV1"),
+    ]
+    for pattern, label in patterns:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return label
+    return ""
+
+
+def _extract_ott_tag(filename):
+    ott_patterns = [
+        (r"\bDS4K\b", "DS4K"),
+        (r"\bDSNP\b|\bDisney(?:\+| Plus)?\b", "DSNP"),
+        (r"\bJHS\b|\bJioHotstar\b", "JHS"),
+        (r"\bHS\b|\bHotstar\b", "HS"),
+        (r"\bAMZN\b|\bAmazon\b|\bPrime\b", "AMZN"),
+        (r"\bNF\b|\bNetflix\b", "NF"),
+        (r"\bIMAX\b", "IMAX"),
+        (r"\bHBO\b|\bMAX\b", "HBO"),
+        (r"\bCR\b|\bCrunchyroll\b", "CR"),
+        (r"\bZEE5\b", "ZEE5"),
+        (r"\bSonyLIV\b|\bSLIV\b", "SonyLIV"),
+        (r"\bAHA\b", "AHA"),
+        (r"\bSUNNXT\b", "SUNNXT"),
+        (r"\bJioCinema\b|\bJIO\b", "JioCinema"),
+    ]
+    for pattern, label in ott_patterns:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return label
+    return ""
+
+
+def _extract_release_group(filename):
+    stem = Path(filename).stem
+    release_match = re.search(
+        r"(?:^|\s)-\s*([A-Za-z0-9][A-Za-z0-9._-]{1,30})(?:[\s\]\)]|$)",
+        stem,
+    )
+    if release_match:
+        return release_match.group(1).strip(" -._")
+
+    bracket_tags = re.findall(r"\[([A-Za-z0-9][A-Za-z0-9 ._-]{1,30})\]", stem)
+    skip_words = {
+        "tamil",
+        "hindi",
+        "english",
+        "esub",
+        "multi",
+        "web-dl",
+        "webrip",
+        "bluray",
+        "1080p",
+        "720p",
+        "2160p",
+    }
+    for tag in reversed(bracket_tags):
+        clean = _clean_rename_token(tag)
+        if clean and clean.lower() not in skip_words:
+            return clean
+    return ""
+
+
+def _extract_audio_tag(filename):
+    match = re.search(
+        r"\b(E[-\s.]?AC[-\s.]?3|DDP|DD\+|AAC|DTS[-\s.]?HD|DTS|TrueHD|Atmos|Opus|FLAC|MP3)(?:[\s._-]*(2\.0|5\.1|7\.1|[26]CH))?",
+        filename,
+        re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    codec = match.group(1).replace(" ", "").replace(".", "").replace("-", "").upper()
+    channels = (match.group(2) or "").upper()
+    return f"{codec} {channels}".strip()
+
+
+def _normalize_audio_codec(codec):
+    codec = str(codec or "").lower()
+    if codec in {"eac3", "e-ac-3", "ddp", "dd+"}:
+        return "DDP"
+    if codec == "ac3":
+        return "AC3"
+    if codec == "aac":
+        return "AAC"
+    if "dts" in codec:
+        return "DTS"
+    if "truehd" in codec:
+        return "TrueHD"
+    if codec == "opus":
+        return "Opus"
+    if codec == "flac":
+        return "FLAC"
+    if codec == "mp3":
+        return "MP3"
+    return codec.upper() if codec else ""
+
+
+def _normalize_video_codec(codec):
+    codec = str(codec or "").lower()
+    if codec in {"hevc", "h265", "x265"}:
+        return "×265"
+    if codec in {"h264", "avc", "x264"}:
+        return "×264"
+    if codec == "av1":
+        return "AV1"
+    return codec.upper() if codec else ""
+
+
+def _normalize_channels_count(channels):
+    try:
+        channels = int(channels)
+    except (TypeError, ValueError):
+        return ""
+    return {
+        1: "1.0",
+        2: "2.0",
+        6: "5.1",
+        8: "7.1",
+    }.get(channels, f"{channels}ch")
+
+
+def _extract_part_tag(filename):
+    match = re.search(r"\b(?:part|pt|p)[\s._-]*0*(\d{1,3})\b", filename, re.IGNORECASE)
+    return f"P{int(match.group(1)):02}" if match else ""
+
+
+def _short_language_tag(languages):
+    if not languages:
+        return ""
+    parts = [part.strip() for part in re.split(r"[,/|]+", languages) if part.strip()]
+    if len(parts) >= 3:
+        return f"Multi{len(parts)}"
+    if len(parts) == 2:
+        return "Dual"
+    return parts[0]
+
+
+def _short_subtitle_tag(subtitles, filename):
+    text = f"{subtitles} {filename}".lower()
+    if "msub" in text or len([p for p in re.split(r"[,/|]+", subtitles or "") if p.strip()]) > 1:
+        return "MSub"
+    if "esub" in text or "english" in text or re.search(r"\beng?\b", text):
+        return "ESub"
+    return "Sub" if subtitles else ""
+
+
+def _pretty_bitrate(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if any(unit in text.lower() for unit in ("kb/s", "mb/s", "kbps", "mbps")):
+        return text.replace(" ", "")
+    try:
+        value = int(float(text))
+    except (TypeError, ValueError):
+        return text
+    return f"{round(value / 1000)}kbps" if value else ""
+
+
+async def _extract_mediainfo_rename_info(filepath):
+    info = {}
+    try:
+        stdout, _, code = await cmd_exec(["mediainfo", "--Output=JSON", filepath])
+        if code != 0 or not stdout:
+            return info
+        data = json.loads(stdout)
+        tracks = (data.get("media") or {}).get("track") or []
+    except Exception as e:
+        LOGGER.warning(f"MediaInfo rename metadata failed: {e}")
+        return info
+
+    audio_codecs = []
+    audio_channels = []
+    audio_bitrates = []
+    audio_parts = []
+    atmos = False
+    for track in tracks:
+        if track.get("@type") != "Audio":
+            continue
+        fmt = (
+            track.get("Format_Commercial_IfAny")
+            or track.get("Format")
+            or track.get("CodecID")
+            or ""
+        )
+        title = f"{track.get('Title', '')} {track.get('CommercialName', '')}".lower()
+        acodec = _normalize_audio_codec(fmt)
+        channels = (
+            track.get("ChannelLayout")
+            or track.get("Channels/String")
+            or _normalize_channels_count(track.get("Channels"))
+        )
+        channels = str(channels or "").replace(" channels", "").replace(" ", "")
+        if channels.isdigit():
+            channels = _normalize_channels_count(channels)
+        bitrate = _pretty_bitrate(
+            track.get("BitRate")
+            or track.get("BitRate/String")
+            or track.get("BitRate_Nominal")
+        )
+        if "atmos" in title or "joc" in title:
+            atmos = True
+        if acodec and acodec not in audio_codecs:
+            audio_codecs.append(acodec)
+        if channels and channels not in audio_channels:
+            audio_channels.append(channels)
+        if bitrate and bitrate not in audio_bitrates:
+            audio_bitrates.append(bitrate)
+        part = " ".join(p for p in (acodec, channels, "Atmos" if atmos else "") if p)
+        if part and part not in audio_parts:
+            audio_parts.append(part)
+    if audio_codecs:
+        info["acodec"] = audio_codecs[0]
+        info["audio_codec"] = "/".join(audio_codecs)
+    if audio_channels:
+        info["audio_channels"] = "/".join(audio_channels)
+    if audio_bitrates:
+        info["audio_bitrate"] = "/".join(audio_bitrates)
+    if audio_parts:
+        info["audio"] = audio_parts[0]
+    return info
+
+
+async def _enrich_template_metadata(metadata, filename, filepath=None, extra=None):
+    metadata = {key: str(value or "") for key, value in metadata.items()}
+    extra = extra or {}
+    for key, value in extra.items():
+        metadata[key] = str(value or "")
+
+    raw_name = Path(filename).stem
+    extension = Path(filename).suffix
+    metadata.setdefault("title", metadata.get("name", ""))
+    metadata["file_name"] = filename
+    metadata["raw_name"] = raw_name
+    metadata["extension"] = extension
+    metadata["name"] = metadata.get("title", "")
+    metadata["file_caption"] = metadata.get("file_caption") or metadata.get("precaption", "")
+    metadata["link"] = metadata.get("link", "")
+    metadata["part"] = metadata.get("part") or _extract_part_tag(filename)
+    metadata["audio"] = metadata.get("audio") or _extract_audio_tag(filename)
+
+    if filepath and await aiopath.exists(filepath):
+        try:
+            metadata["file_size"] = get_readable_file_size(await aiopath.getsize(filepath))
+        except Exception:
+            metadata.setdefault("file_size", "")
+        try:
+            duration, resolution, languages, subtitles = await get_media_info(filepath, True)
+            metadata.setdefault("duration", get_readable_time(duration) if duration else "")
+            if resolution and not metadata.get("resolution"):
+                metadata["resolution"] = resolution
+            if languages:
+                metadata["languages"] = languages
+            if subtitles:
+                metadata["subtitles"] = subtitles
+        except Exception as e:
+            LOGGER.warning(f"Template media metadata failed for {filename}: {e}")
+    metadata.setdefault("file_size", metadata.get("size", ""))
+    metadata["size"] = metadata.get("size") or metadata.get("file_size", "")
+    metadata["shortlang"] = metadata.get("shortlang") or _short_language_tag(metadata.get("languages", ""))
+    metadata["shortsub"] = metadata.get("shortsub") or _short_subtitle_tag(
+        metadata.get("subtitles", ""), filename
+    )
+    if metadata.get("quality") == "DS4K":
+        metadata["resolution"] = ""
+        metadata["bit"] = ""
+    return metadata
+
+
+def _clean_title_from_filename(filename):
+    stem = Path(filename).stem
+    stem = re.sub(r"(?:^|\s)-\s*[A-Za-z0-9][A-Za-z0-9._-]{1,30}$", "", stem)
+    title = re.sub(r"[\[\](){}]", " ", stem)
+    title = title.replace(".", " ").replace("_", " ").replace("-", " ")
+    title = re.sub(r"\s+", " ", title).strip()
+
+    sxe = re.search(
+        r"(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s._-]*[Ee]0*(\d{1,4})(?![A-Za-z0-9])",
+        title,
+    )
+    if sxe:
+        title = title[: sxe.start()] if sxe.start() > 0 else title[sxe.end():]
+
+    tech_pattern = r"\b(?:19\d{2}|20[0-3]\d|2160p|1080p|720p|480p|4K|WEB\s?DL|WEB\s?Rip|Blu\s?Ray|BRRip|BDRip|HDRip|HDTV|DVDRip|DS4K|DSNP|AMZN|NF|JHS|Hotstar|MULTi|EAC3|E AC3|AC3|AAC|DTS|Atmos|HEVC|H265|H264|x265|x264|10bit|8bit|12bit|Tamil|Hindi|English|ESub)\b"
+    parts = re.split(
+        tech_pattern,
+        title,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )
+    title = parts[0]
+    if not title.strip() and len(parts) > 1:
+        title = re.sub(
+            rf"^(?:\s*{tech_pattern}\s*)+",
+            "",
+            " ".join(parts[1:]),
+            flags=re.IGNORECASE,
+        )
+    title = re.sub(r"\s+", " ", title).strip(" -._")
+    return title
+
+
+async def _extract_stream_rename_info(filepath):
+    info = {}
+    if not filepath or not await aiopath.exists(filepath):
+        return info
+    info.update(await _extract_mediainfo_rename_info(filepath))
+    try:
+        streams = await get_streams(filepath)
+    except Exception as e:
+        LOGGER.warning(f"AutoRename stream metadata failed: {e}")
+        return info
+    if not streams:
+        return info
+    audio_parts = []
+    audio_codecs = []
+    audio_channels = []
+    audio_bitrates = []
+    atmos = False
+    for stream in streams:
+        codec_type = stream.get("codec_type")
+        if codec_type == "video" and not info.get("vcodec"):
+            height = stream.get("height")
+            if height:
+                try:
+                    height = int(height)
+                    if height <= 480:
+                        info["resolution"] = "480p"
+                    elif height <= 720:
+                        info["resolution"] = "720p"
+                    elif height <= 1080:
+                        info["resolution"] = "1080p"
+                    elif height <= 2160:
+                        info["resolution"] = "2160p"
+                    else:
+                        info["resolution"] = f"{height}p"
+                except (TypeError, ValueError):
+                    pass
+            vcodec = _normalize_video_codec(stream.get("codec_name"))
+            if vcodec:
+                info["vcodec"] = vcodec
+                info["codec"] = vcodec
+            bit_depth = (
+                stream.get("bits_per_raw_sample")
+                or stream.get("bits_per_sample")
+                or ""
+            )
+            pix_fmt = str(stream.get("pix_fmt") or "")
+            profile = str(stream.get("profile") or "")
+            bit_source = f"{bit_depth} {pix_fmt} {profile}"
+            bit_match = re.search(r"\b(8|10|12)\b", bit_source)
+            if bit_match and bit_match.group(1) != "8" and not info.get("bit"):
+                info["bit"] = f"{bit_match.group(1)}bit"
+            dyn_source = " ".join(
+                str(stream.get(k, ""))
+                for k in ("color_transfer", "color_primaries", "pix_fmt", "profile")
+            ).lower()
+            if "dovi" in dyn_source or "dolby" in dyn_source:
+                info["hdr"] = "DV"
+                info["dynamic_range"] = "DV"
+            elif "smpte2084" in dyn_source or "hdr" in dyn_source:
+                info["hdr"] = "HDR"
+                info["dynamic_range"] = "HDR"
+            elif "bt709" in dyn_source or pix_fmt:
+                info.setdefault("dynamic_range", "SDR")
+        elif codec_type == "audio":
+            acodec = _normalize_audio_codec(stream.get("codec_name"))
+            channels = _normalize_channels_count(stream.get("channels"))
+            bitrate = stream.get("bit_rate") or ""
+            tags = stream.get("tags") or {}
+            title = f"{tags.get('title', '')} {stream.get('profile', '')}".lower()
+            if "atmos" in title:
+                atmos = True
+            if acodec and acodec not in audio_codecs:
+                audio_codecs.append(acodec)
+            if channels and channels not in audio_channels:
+                audio_channels.append(channels)
+            if bitrate:
+                try:
+                    br = int(bitrate)
+                    pretty = f"{round(br / 1000)}kbps"
+                    if pretty not in audio_bitrates:
+                        audio_bitrates.append(pretty)
+                except (TypeError, ValueError):
+                    pass
+            part = " ".join(p for p in (acodec, channels, "Atmos" if atmos else "") if p)
+            if part and part not in audio_parts:
+                audio_parts.append(part)
+    if audio_codecs and not info.get("acodec"):
+        info["acodec"] = audio_codecs[0]
+    if audio_codecs and not info.get("audio_codec"):
+        info["audio_codec"] = "/".join(audio_codecs)
+    if audio_channels and not info.get("audio_channels"):
+        info["audio_channels"] = "/".join(audio_channels)
+    if audio_bitrates and not info.get("audio_bitrate"):
+        info["audio_bitrate"] = "/".join(audio_bitrates)
+    if audio_parts and not info.get("audio"):
+        info["audio"] = audio_parts[0]
+    return info
+
+
+async def build_caption_metadata(filename, filepath=None, **extra):
+    metadata = await extract_metadata_from_filename(filename, filepath)
+    metadata = {key: str(value or "") for key, value in metadata.items()}
+    metadata.setdefault("filename", filename)
+    metadata["filename"] = filename
+    metadata.setdefault("upload_filename", filename)
+
+    if filepath and await aiopath.exists(filepath):
+        try:
+            metadata["size"] = get_readable_file_size(await aiopath.getsize(filepath))
+        except Exception:
+            metadata["size"] = ""
+        try:
+            duration, resolution, languages, subtitles = await get_media_info(
+                filepath, True
+            )
+            metadata["duration"] = get_readable_time(duration) if duration else ""
+            if resolution and not metadata.get("resolution"):
+                metadata["resolution"] = resolution
+            metadata["languages"] = languages or ""
+            metadata["subtitles"] = subtitles or ""
+        except Exception as e:
+            LOGGER.warning(f"Caption media metadata failed for {filename}: {e}")
+        try:
+            metadata["md5_hash"] = await sync_to_async(get_md5_hash, filepath)
+        except Exception:
+            metadata["md5_hash"] = ""
+    else:
+        metadata.update(
+            {
+                "size": "",
+                "duration": "",
+                "languages": "",
+                "subtitles": "",
+                "md5_hash": "",
+            }
+        )
+
+    metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
+    return _SafeFormatDict(metadata)
+
+
+async def _resolve_imdb_title(title, year=None):
+    title = _clean_rename_token(title)
+    if not title or title.lower() == "unknown":
+        return title
+    try:
+        from imdbinfo import get_movie, search_title
+
+        def lookup():
+            results = search_title(title).titles
+            if not results:
+                return ""
+            if year:
+                results = [
+                    item for item in results
+                    if str(getattr(item, "year", "") or "") == str(year)
+                ] or results
+            results = [
+                item for item in results
+                if getattr(item, "kind", "") in (
+                    "movie",
+                    "tvSeries",
+                    "tvMiniSeries",
+                    "tvEpisode",
+                    "video",
+                )
+            ] or results
+            movie = get_movie(results[0].id)
+            return getattr(movie, "title", "") or getattr(results[0], "title", "")
+
+        resolved = await sync_to_async(lookup)
+        return resolved or title
+    except Exception as e:
+        LOGGER.warning(f"IMDb title lookup failed for '{title}': {e}")
+        return title
+
+
+def _looks_like_anime_name(filename, title):
+    anime_tokens = (
+        "anime",
+        "subsplease",
+        "erai-raws",
+        "horriblesubs",
+        "anime time",
+        "judas",
+        "ember",
+        "animeshrine",
+        "toonworld4all",
+        "animepahe",
+        "hianime",
+        "aniwatch",
+        "crunchyroll",
+        "b-global",
+    )
+    text = f"{filename} {title}".lower()
+    return any(token in text for token in anime_tokens)
+
+
+async def _resolve_tmdb_title(title, year=None):
+    title = _clean_rename_token(title)
+    if not title or not Config.TMDB_ACCESS_TOKEN:
+        return ""
+    try:
+        from httpx import AsyncClient
+
+        headers = {
+            "Authorization": f"Bearer {Config.TMDB_ACCESS_TOKEN}",
+            "accept": "application/json",
+        }
+        params = {
+            "query": title,
+            "include_adult": "false",
+            "language": "en-US",
+            "page": "1",
+        }
+        if year:
+            params["year"] = year
+        async with AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.themoviedb.org/3/search/multi",
+                params=params,
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            LOGGER.warning(f"TMDb title lookup failed with status {resp.status_code}")
+            return ""
+        results = [
+            item for item in resp.json().get("results", [])
+            if item.get("media_type") in {"movie", "tv"}
+        ]
+        if not results:
+            return ""
+        result = results[0]
+        return result.get("title") or result.get("name") or ""
+    except Exception as e:
+        LOGGER.warning(f"TMDb title lookup failed for '{title}': {e}")
+        return ""
+
+
+async def _fetch_anilist_media(title):
+    title = _clean_rename_token(title)
+    if not title:
+        return {}
+    cache_key = f"anilist:{title.lower()}"
+    if cache_key in _metadata_cache:
+        return _metadata_cache[cache_key]
+    query = """
+    query ($search: String) {
+      Media(search: $search, type: ANIME) {
+        title { english romaji native }
+        bannerImage
+        coverImage { extraLarge large }
+        description(asHtml: false)
+        siteUrl
+        genres
+        seasonYear
+      }
+    }
+    """
+    try:
+        from httpx import AsyncClient
+
+        async with AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": title}},
+            )
+        if resp.status_code != 200:
+            LOGGER.warning(f"AniList title lookup failed with status {resp.status_code}")
+            return {}
+        media = resp.json().get("data", {}).get("Media") or {}
+        if media:
+            _metadata_cache[cache_key] = media
+        return media
+    except Exception as e:
+        LOGGER.warning(f"AniList title lookup failed for '{title}': {e}")
+        return {}
+
+
+async def _resolve_anilist_title(title):
+    media = await _fetch_anilist_media(title)
+    titles = media.get("title") or {}
+    return titles.get("english") or titles.get("romaji") or titles.get("native") or ""
+
+
+async def get_anilist_poster_link(title, as_doc=False):
+    media = await _fetch_anilist_media(title)
+    if not media:
+        return None
+    cover = media.get("coverImage") or {}
+    if as_doc:
+        return cover.get("extraLarge") or cover.get("large") or media.get("bannerImage")
+    return media.get("bannerImage") or cover.get("extraLarge") or cover.get("large")
+
+
+async def _fetch_jikan_media(title):
+    title = _clean_rename_token(title)
+    if not title:
+        return {}
+    cache_key = f"jikan:{title.lower()}"
+    if cache_key in _metadata_cache:
+        return _metadata_cache[cache_key]
+    try:
+        from httpx import AsyncClient
+
+        async with AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://api.jikan.moe/v4/anime",
+                params={"q": title, "limit": 1},
+            )
+        if resp.status_code != 200:
+            LOGGER.warning(f"Jikan lookup failed with status {resp.status_code}")
+            return {}
+        data = (resp.json().get("data") or [{}])[0] or {}
+        if data:
+            _metadata_cache[cache_key] = data
+        return data
+    except Exception as e:
+        LOGGER.warning(f"Jikan lookup failed for '{title}': {e}")
+        return {}
+
+
+async def _fetch_kitsu_media(title):
+    title = _clean_rename_token(title)
+    if not title:
+        return {}
+    cache_key = f"kitsu:{title.lower()}"
+    if cache_key in _metadata_cache:
+        return _metadata_cache[cache_key]
+    try:
+        from httpx import AsyncClient
+
+        async with AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://kitsu.io/api/edge/anime",
+                params={"filter[text]": title, "page[limit]": 1},
+            )
+        if resp.status_code != 200:
+            LOGGER.warning(f"Kitsu lookup failed with status {resp.status_code}")
+            return {}
+        data = ((resp.json().get("data") or [{}])[0] or {}).get("attributes") or {}
+        if data:
+            _metadata_cache[cache_key] = data
+        return data
+    except Exception as e:
+        LOGGER.warning(f"Kitsu lookup failed for '{title}': {e}")
+        return {}
+
+
+async def _resolve_jikan_title(title):
+    media = await _fetch_jikan_media(title)
+    return media.get("title_english") or media.get("title") or ""
+
+
+async def _resolve_kitsu_title(title):
+    media = await _fetch_kitsu_media(title)
+    titles = media.get("titles") or {}
+    return titles.get("en") or titles.get("en_jp") or titles.get("ja_jp") or media.get("canonicalTitle") or ""
+
+
+async def get_jikan_poster_link(title, as_doc=False):
+    media = await _fetch_jikan_media(title)
+    images = ((media.get("images") or {}).get("jpg") or {})
+    return images.get("large_image_url") or images.get("image_url")
+
+
+async def get_kitsu_poster_link(title, as_doc=False):
+    media = await _fetch_kitsu_media(title)
+    if as_doc:
+        poster = media.get("posterImage") or {}
+        return poster.get("original") or poster.get("large")
+    cover = media.get("coverImage") or {}
+    poster = media.get("posterImage") or {}
+    return cover.get("original") or cover.get("large") or poster.get("original") or poster.get("large")
+
+
+async def get_release_description(title):
+    media = await _fetch_anilist_media(title)
+    if media.get("description"):
+        return re.sub(r"<[^>]+>", "", media["description"]).strip()
+    media = await _fetch_jikan_media(title)
+    if media.get("synopsis"):
+        return media["synopsis"].strip()
+    media = await _fetch_kitsu_media(title)
+    return str(media.get("synopsis") or "").strip()
+
+
+async def _resolve_media_title(title, filename, year=None):
+    title = _clean_rename_token(title)
+    if not title or title.lower() == "unknown":
+        return title
+    if _looks_like_anime_name(filename, title):
+        anilist_title = await _resolve_anilist_title(title)
+        if anilist_title:
+            return anilist_title
+        jikan_title = await _resolve_jikan_title(title)
+        if jikan_title:
+            return jikan_title
+        kitsu_title = await _resolve_kitsu_title(title)
+        if kitsu_title:
+            return kitsu_title
+    tmdb_title = await _resolve_tmdb_title(title, year)
+    if tmdb_title:
+        return tmdb_title
+    anilist_title = await _resolve_anilist_title(title)
+    if anilist_title:
+        return anilist_title
+    jikan_title = await _resolve_jikan_title(title)
+    if jikan_title:
+        return jikan_title
+    kitsu_title = await _resolve_kitsu_title(title)
+    if kitsu_title:
+        return kitsu_title
+    return await _resolve_imdb_title(title, year)
+
+
 async def extract_metadata_from_filename(filename, filepath=None):
-    """Extract title, season, episode, quality, and chapter from a filename.
+    """Extract title, season, episode, source, and media fields from a filename.
 
     Ported from WZMLakane leech_utils.py with extended patterns for anime,
     TV shows, movies, and manga chapter naming conventions.
@@ -934,8 +1763,23 @@ async def extract_metadata_from_filename(filename, filepath=None):
         "title": "Unknown",
         "season": "1",
         "episode": "01",
-        "quality": "1080p",
+        "resolution": "",
+        "bit": "",
+        "ott": "",
+        "quality": "",
+        "lib": "",
+        "year": "",
         "chapter": "001",
+        "vcodec": "",
+        "codec": "",
+        "acodec": "",
+        "audio_codec": "",
+        "audio_channels": "",
+        "audio_bitrate": "",
+        "hdr": "",
+        "dynamic_range": "",
+        "release_group": "",
+        "group": "",
     }
 
     uploader_tags = [
@@ -956,7 +1800,7 @@ async def extract_metadata_from_filename(filename, filepath=None):
     clean_filename = re.sub(pattern, "", filename, flags=re.IGNORECASE).strip()
 
     title_patterns = [
-        r"^(.+?)[\s\.\-]*[Ss]0*(\d+)[\s\.\-]*[Ee]0*(\d+)",
+        r"^(.+?)[\s\.\-]*(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s\.\-]*[Ee]0*(\d{1,4})(?![A-Za-z0-9])",
         r"^(.+?)[\s\.\-]*[Ss]eason[\s\.\-]*0*(\d+)[\s\.\-]*[Ee]pisode[\s\.\-]*0*(\d+)",
         r"^\[CH[-\s]?\d+\][\s\.\-]*(.+?)[\s\.\-]*-",
         r"^\[\d+\][\s\.\-]*(.+?)[\s\.\-]*(?:@|$)",
@@ -1013,12 +1857,8 @@ async def extract_metadata_from_filename(filename, filepath=None):
             break
 
     if not title_found and clean_filename:
-        base_title = re.split(
-            r"[\.\-\s]+(?:199[0-9]|20[0-2][0-9]|2030)|[\.\-\s]+\d{3,4}p",
-            clean_filename,
-        )[0]
+        base_title = _clean_title_from_filename(clean_filename)
         if base_title:
-            base_title = base_title.replace(".", " ").replace("-", " ").strip()
             base_title = re.sub(
                 r"\s*[\(\[]?\s*(199[0-9]|20[0-2][0-9]|2030)\s*[\)\]]?\s*",
                 " ",
@@ -1026,14 +1866,17 @@ async def extract_metadata_from_filename(filename, filepath=None):
             ).strip()
             metadata["title"] = base_title
 
-    season_match = re.search(r"[Ss](?:eason[\s\.\-]*)?0*(\d+)", filename)
+    season_match = re.search(
+        r"(?<![A-Za-z0-9])(?:[Ss]eason[\s\.\-]*|[Ss])0*(\d{1,2})(?![A-Za-z0-9])",
+        filename,
+    )
     if season_match:
         metadata["season"] = season_match.group(1)
 
     if not episode_found:
         episode_patterns = [
             r"^0*(\d{1,4})[\s\.\-_]+(?![xX]\d)",
-            r"[Ee](?:pisode|p)?[\s\.\-]*0*(\d+)",
+            r"(?<![A-Za-z0-9])(?:[Ee]pisode|[Ee]p|[Ee])[\s\.\-]*0*(\d{1,4})(?![A-Za-z0-9])",
             r"[\s\.\-]+-[\s\.\-]*0*(\d+)(?=[\s\.\-]|\.mkv|\.mp4|\.avi|$)",
             r"[\s\.\-]+0*(\d+)[\s\.\-]+\[",
             r"[\s\.\-]+-[\s\.\-]+0*(\d+)[\s\.\-]+\[",
@@ -1089,13 +1932,9 @@ async def extract_metadata_from_filename(filename, filepath=None):
                         4 if ep_num >= 1000 else 3 if ep_num >= 100 else 2
                     )
 
-    quality_match = re.search(r"(\d{3,4}p|4K|2160p)", filename, re.IGNORECASE)
-    if quality_match:
-        metadata["quality"] = quality_match.group(1)
-    elif filepath and await aiopath.exists(filepath):
-        file_size = await aiopath.getsize(filepath)
-        if file_size > 500 * 1024 * 1024:
-            metadata["quality"] = "HDRip"
+    resolution_match = re.search(r"(\d{3,4}p|4K|2160p)", filename, re.IGNORECASE)
+    if resolution_match:
+        metadata["resolution"] = _normalize_resolution(resolution_match.group(1))
 
     chapter_patterns = [
         r"\[CH[-\s]?(\d+)\]",
@@ -1110,7 +1949,7 @@ async def extract_metadata_from_filename(filename, filepath=None):
         r"\bChap[-_\s]?(\d+)\b",
         r"\bBook[-_\s]?(\d+)\b",
         r"\bE(\d{2,4})\b",
-        r"\bS\d+E(\d+)\b",
+            r"(?<![A-Za-z0-9])S\d+E(\d+)(?![A-Za-z0-9])",
         r"\[(?:C|c)(\d+)\]",
     ]
 
@@ -1120,10 +1959,70 @@ async def extract_metadata_from_filename(filename, filepath=None):
             metadata["chapter"] = chapter_match.group(1).zfill(3)
             break
 
+    year_match = re.search(r"\b(19\d{2}|20[0-3]\d)\b", filename)
+    if year_match:
+        metadata["year"] = year_match.group(1)
+
+    source_quality = _extract_source_quality(filename)
+    if source_quality:
+        metadata["quality"] = source_quality
+
+    bit_match = re.search(r"\b(8|10|12)[-\s.]?bit\b|\bHi(8|10|12)P\b", filename, re.IGNORECASE)
+    if bit_match:
+        bit_value = bit_match.group(1) or bit_match.group(2)
+        if bit_value != "8":
+            metadata["bit"] = f"{bit_value}bit"
+
+    metadata["ott"] = _extract_ott_tag(filename)
+    metadata["lib"] = _extract_release_group(filename)
+    metadata["release_group"] = metadata["lib"]
+    metadata["group"] = metadata["lib"]
+    metadata["codec"] = _extract_codec_tag(filename)
+    metadata["vcodec"] = metadata["codec"]
+    metadata["hdr"] = _extract_dynamic_range(filename)
+    metadata["dynamic_range"] = metadata["hdr"]
+    audio_tag = _extract_audio_tag(filename)
+    if audio_tag:
+        parts = audio_tag.split()
+        metadata["audio"] = audio_tag
+        metadata["audio_codec"] = parts[0]
+        metadata["acodec"] = parts[0]
+        if len(parts) > 1:
+            metadata["audio_channels"] = parts[1]
+
+    stream_info = await _extract_stream_rename_info(filepath)
+    for key, value in stream_info.items():
+        if value and not metadata.get(key):
+            metadata[key] = value
+    if stream_info.get("resolution") and not resolution_match:
+        metadata["resolution"] = stream_info["resolution"]
+    if stream_info.get("bit") and not metadata["bit"]:
+        metadata["bit"] = stream_info["bit"]
+    if metadata.get("quality") == "DS4K":
+        metadata["resolution"] = ""
+        metadata["bit"] = ""
+
+    if not metadata["title"] or metadata["title"].lower() == "unknown":
+        metadata["title"] = _clean_title_from_filename(filename)
+
+    metadata["title"] = await _resolve_media_title(
+        metadata["title"],
+        filename,
+        metadata.get("year") or None,
+    )
+    if not metadata["title"] or metadata["title"].lower() == "unknown":
+        metadata["title"] = _clean_title_from_filename(filename)
+    if metadata.get("lib") and metadata["title"].lower() == metadata["lib"].lower():
+        metadata["lib"] = ""
+    if not metadata.get("release_group"):
+        metadata["release_group"] = metadata.get("lib", "")
+    if not metadata.get("group"):
+        metadata["group"] = metadata.get("release_group", "")
+
     return metadata
 
 
-async def apply_template_rename(filename, template, filepath=None):
+async def apply_template_rename(filename, template, filepath=None, **extra):
     """Apply a template-based rename using metadata extracted from the filename.
 
     Supports math offset tags like {episode:+12} or {season:-1}.
@@ -1132,6 +2031,7 @@ async def apply_template_rename(filename, template, filepath=None):
     if not template or "{" not in template:
         return filename
     metadata = await extract_metadata_from_filename(filename, filepath)
+    metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
 
     def _apply_math_offset(tmpl, meta):
         def replacer(m):
@@ -1160,10 +2060,11 @@ async def apply_template_rename(filename, template, filepath=None):
     template = _apply_math_offset(template, metadata)
 
     try:
-        renamed = template.format(**metadata)
+        renamed = template.format_map(_SafeFormatDict(metadata))
         original_ext = Path(filename).suffix
-        if not renamed.endswith(original_ext):
+        if original_ext and not renamed.lower().endswith(original_ext.lower()):
             renamed += original_ext
+        renamed = _sanitize_filename(renamed, filename)
         # Guard: if rename produced empty or whitespace-only filename, keep original
         if not renamed.strip() or renamed.strip() == original_ext:
             return filename
@@ -1520,11 +2421,66 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
     if year:
         LOGGER.info(f"Year extracted: {year}")
 
+    cache_key = f"poster:{title.lower()}:{'doc' if as_doc else 'media'}"
+    if cache_key in _metadata_cache:
+        cached_url, provider = _metadata_cache[cache_key]
+        LOGGER.info(f"Poster found via cached {provider}")
+        return cached_url
+
+    if _looks_like_anime_name(raw_filename, title):
+        anilist_url = await get_anilist_poster_link(title, as_doc)
+        if anilist_url:
+            LOGGER.info("Poster found via AniList API")
+            _metadata_cache[cache_key] = (anilist_url, "AniList")
+            return anilist_url
+        jikan_url = await get_jikan_poster_link(title, as_doc)
+        if jikan_url:
+            LOGGER.info("Poster found via Jikan API")
+            _metadata_cache[cache_key] = (jikan_url, "Jikan")
+            return jikan_url
+        kitsu_url = await get_kitsu_poster_link(title, as_doc)
+        if kitsu_url:
+            LOGGER.info("Poster found via Kitsu API")
+            _metadata_cache[cache_key] = (kitsu_url, "Kitsu")
+            return kitsu_url
+
     poster_url = await get_tmdb_poster_link(title, year, as_doc)
     if poster_url:
         LOGGER.info("Poster found via TMDb API")
+        _metadata_cache[cache_key] = (poster_url, "TMDb")
         return poster_url
 
-    LOGGER.info("No poster found from TMDb")
+    anilist_url = await get_anilist_poster_link(title, as_doc)
+    if anilist_url:
+        LOGGER.info("Poster found via AniList API")
+        _metadata_cache[cache_key] = (anilist_url, "AniList")
+        return anilist_url
+    jikan_url = await get_jikan_poster_link(title, as_doc)
+    if jikan_url:
+        LOGGER.info("Poster found via Jikan API")
+        _metadata_cache[cache_key] = (jikan_url, "Jikan")
+        return jikan_url
+    kitsu_url = await get_kitsu_poster_link(title, as_doc)
+    if kitsu_url:
+        LOGGER.info("Poster found via Kitsu API")
+        _metadata_cache[cache_key] = (kitsu_url, "Kitsu")
+        return kitsu_url
+
+    LOGGER.info("No poster found from metadata providers")
     return None
 
+
+async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None, rename_regex=None):
+    title, _, _ = format_clean_poster_title(raw_filename, rename_regex)
+    if not _looks_like_anime_name(raw_filename, title):
+        return None
+
+    poster_url = await get_final_poster_url(raw_filename, as_doc=False, rename_regex=rename_regex)
+    if poster_url:
+        thumb = await download_image_thumb(poster_url, landscape=True)
+        if thumb:
+            LOGGER.info("Anime landscape thumbnail selected from metadata provider")
+            return thumb
+
+    LOGGER.info("Anime metadata thumbnail missing; using FFmpeg frame fallback")
+    return await get_video_thumbnail(video_file, duration)

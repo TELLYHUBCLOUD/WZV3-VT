@@ -6,6 +6,7 @@ from asyncio import TimeoutError
 
 from .... import task_dict_lock, task_dict, LOGGER
 from ....core.config_manager import Config
+from ....core.startup import aria2_download_performance_options
 from ....core.torrent_manager import TorrentManager, is_metadata, aria2_name
 from ...ext_utils.bot_utils import bt_selection_buttons
 from ...ext_utils.task_manager import check_running_tasks
@@ -19,7 +20,7 @@ async def add_aria2_download(listener, dpath, header, ratio, seed_time):
     ):
         await listener.on_download_error("Torrent and magnet downloads are disabled.")
         return
-    a2c_opt = {"dir": dpath}
+    a2c_opt = {"dir": dpath, **aria2_download_performance_options()}
     if listener.name:
         a2c_opt["out"] = listener.name
     if header:

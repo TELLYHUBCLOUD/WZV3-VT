@@ -241,6 +241,7 @@ class TaskListener(TaskConfig):
             auto_enabled,
             bool_setting,
             maybe_enable_auto_unzip,
+            process_auto_finish_pipeline,
             process_auto_pipeline,
         )
 
@@ -297,7 +298,18 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
 
-        metadata_allowed = not self.video_tool
+        if self.video_tool and auto_enabled(self) and not self.is_cancelled:
+            up_path = await process_auto_finish_pipeline(self, up_path, gid)
+            if self.is_cancelled:
+                return
+            self.is_file = await aiopath.isfile(up_path)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
+            self.size = await get_path_size(up_dir)
+            self.clear()
+
+        metadata_allowed = True
+        if auto_enabled(self):
+            metadata_allowed = bool_setting(self, "AUTO_METADATA")
         if metadata_allowed and (
             (hasattr(self, "metadata_dict") and self.metadata_dict)
             or (hasattr(self, "audio_metadata_dict") and self.audio_metadata_dict)

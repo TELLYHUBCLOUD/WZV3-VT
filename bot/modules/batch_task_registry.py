@@ -1,10 +1,16 @@
 from contextlib import suppress
+import json
+from os import path as ospath
 from secrets import token_hex
 
-from .. import task_dict, task_dict_lock
+from aiofiles import open as aiopen
+from aiofiles.os import makedirs
+
+from .. import DOWNLOAD_DIR, task_dict, task_dict_lock
 from ..core.config_manager import Config
 
 _batch_controllers = {}
+_batch_state_path = ospath.join(DOWNLOAD_DIR, "batch_task_plans.json")
 
 
 def _safe_int(value, default):
@@ -65,6 +71,61 @@ class BatchTaskController:
         _batch_controllers.pop(self.gid, None)
 
 
+async def _read_state():
+    try:
+        async with aiopen(_batch_state_path, "r", encoding="utf-8") as f:
+            return json.loads(await f.read() or "{}")
+    except Exception:
+        return {}
+
+
+async def _write_state(state):
+    await makedirs(DOWNLOAD_DIR, exist_ok=True)
+    async with aiopen(_batch_state_path, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(state, indent=2, ensure_ascii=False, default=str))
+
+
+async def save_batch_plan(controller, payload):
+    state = await _read_state()
+    state[controller.gid] = {
+        "kind": controller.kind,
+        "owner": controller.user_id,
+        "chat_id": controller.message.chat.id,
+        "message_id": controller.message.id,
+        "current_index": 0,
+        "cancelled": False,
+        **(payload or {}),
+    }
+    await _write_state(state)
+
+
+async def update_batch_plan(gid, **updates):
+    state = await _read_state()
+    if gid in state:
+        state[gid].update(updates)
+        await _write_state(state)
+
+
+async def finish_batch_plan(gid, cancelled=False):
+    state = await _read_state()
+    if gid in state:
+        if cancelled:
+            state[gid]["cancelled"] = True
+            state[gid]["finished"] = False
+        else:
+            state.pop(gid, None)
+        await _write_state(state)
+
+
+async def load_unfinished_batch_plans():
+    state = await _read_state()
+    return {
+        gid: plan
+        for gid, plan in state.items()
+        if not plan.get("cancelled") and not plan.get("finished")
+    }
+
+
 def mark_controller_cancelled(gid, reason):
     controller = _batch_controllers.get(gid)
     if controller:
@@ -79,4 +140,5 @@ async def cancel_batch_controller(gid, user_id, is_sudo=False):
     if not is_sudo and user_id != controller.user_id and user_id != Config.OWNER_ID:
         return False
     await controller.cancel("cancelled by user")
+    await finish_batch_plan(gid, cancelled=True)
     return True

@@ -99,12 +99,19 @@ LIBRE_TRANSLATE_API_URL = ""
 LIBRE_TRANSLATE_API_KEY = ""
 SUBTITLE_TRANSLATE_PROVIDER = "libre"
 
+# MyAnimeList official API fallback for anime thumbnails.
+# Optional until your MAL app/client is approved.
+MYANIMELIST_CLIENT_ID = ""
+MYANIMELIST_CLIENT_NAME = ""
+
 # Video Tools / Auto Process
 VT_MERGE_TRACK_TIMEOUT = 60
 VIDEO_TOOLS_REPLY_TIMEOUT = 30
 VIDEO_TOOLS_LOGS = True
 AUTO_PROCESS_MESSAGE_MODE = "quiet"
 AUTO_PROCESS_LOGS = False
+AUTO_VT = False
+AUTO_ORDER = False
 AUTO_AUDIO_ORDER = ""  # Example: tam tel eng
 AUTO_SUBTITLE_ORDER = ""  # Example: eng tam
 
@@ -123,8 +130,8 @@ AUTO_PROCESS = False
 AUTO_LEECH = False
 AUTO_UNZIP = False
 AUTO_REMOVE_STREAMS = False
-AUTO_KEEP_AUDIO_LANGS = "tam"  # Example: tam,ta,tamil
-AUTO_KEEP_SUBTITLE_LANGS = "eng"  # Example: eng,en,english
+AUTO_KEEP_AUDIO_LANGS = ""  # Example: tam,ta,tamil
+AUTO_KEEP_SUBTITLE_LANGS = ""  # Example: eng,en,english
 AUTO_MERGE = False
 AUTO_MERGE_FILENAME = ""  # Empty = use detected title. Supports {title}, {season}, {start}, {end}
 AUTO_MERGE_SAFETY_MB = 150
@@ -138,6 +145,7 @@ INTRO_SUBTITLE_FONT = "Arial"
 INTRO_SUBTITLE_FONT_SIZE = 36
 INTRO_SUBTITLE_COLOR = "&H00FFFFFF"
 INTRO_SUBTITLE_OUTLINE_COLOR = "&H00000000"
+INTRO_SUBTITLE_COLOR_PALETTE = ""  # Example: "#ff4aa2,#4ad8ff,#fff176"
 
 # FFmpeg safety
 FFMPEG_QUEUE_ENABLED = True

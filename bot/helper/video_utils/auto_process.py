@@ -19,6 +19,7 @@ from .video_tools import (
     VIDEO_EXTENSIONS,
     _base_state,
     _execute_vt_pipeline,
+    process_video_tool,
     probe_streams,
 )
 
@@ -118,19 +119,35 @@ async def process_auto_pipeline(listener, up_path, gid):
     listener._process_gid = gid
     listener._auto_process_step = 0
     videos = await _video_files(up_path)
+    auto_vt = bool_setting(listener, "AUTO_VT")
+    auto_order = bool_setting(listener, "AUTO_ORDER")
     remove_streams = bool_setting(listener, "AUTO_REMOVE_STREAMS")
     auto_merge = bool_setting(listener, "AUTO_MERGE")
     auto_intro = bool_setting(listener, "AUTO_INTRO_SUBTITLE")
     listener._auto_process_total = (
-        (len(videos) if remove_streams else 0)
+        (1 if auto_vt else 0)
+        + (len(videos) if auto_order else 0)
+        + (len(videos) if _has_keep_filters(listener) and not remove_streams else 0)
+        + (len(videos) if remove_streams else 0)
         + (1 if auto_merge and await aiopath.isdir(up_path) else 0)
         + (len(videos) if auto_intro else 0)
     )
     if not _quiet_messages():
         await _set_process_message(listener, "Auto Process: starting media pipeline...")
 
-    if remove_streams:
-        up_path = await _auto_remove_streams(listener, up_path)
+    if auto_vt:
+        await _next_process_step(listener, "Opening Video Tools", up_path)
+        up_path = await process_video_tool(listener, up_path)
+        videos = await _video_files(up_path)
+    else:
+        if auto_order:
+            up_path = await _auto_order_streams(listener, up_path)
+
+        if _has_keep_filters(listener) and not remove_streams:
+            up_path = await _auto_keep_streams(listener, up_path)
+
+        if remove_streams:
+            up_path = await _auto_remove_streams(listener, up_path)
 
     if auto_merge and await aiopath.isdir(up_path):
         up_path = await _smart_merge_directory(listener, up_path)
@@ -142,6 +159,16 @@ async def process_auto_pipeline(listener, up_path, gid):
         await send_message(listener.message, "Auto Process: processing finished. Starting upload...")
     else:
         await _set_process_message(listener, "Auto Process: processing finished. Starting upload...")
+    return up_path
+
+
+async def process_auto_finish_pipeline(listener, up_path, gid):
+    if not auto_enabled(listener):
+        return up_path
+    listener._process_gid = gid
+    listener._auto_process_step = 0
+    if bool_setting(listener, "AUTO_INTRO_SUBTITLE"):
+        up_path = await _auto_intro(listener, up_path)
     return up_path
 
 
@@ -157,7 +184,109 @@ async def _video_files(root):
     return sorted(files, key=lambda p: ospath.basename(p).lower())
 
 
+def _has_keep_filters(listener):
+    return bool(
+        _lang_set(_user_value(listener, "AUTO_KEEP_AUDIO_LANGS"))
+        or _lang_set(_user_value(listener, "AUTO_KEEP_SUBTITLE_LANGS"))
+    )
+
+
+async def _auto_order_streams(listener, up_path):
+    audio_order = _user_value(listener, "AUTO_AUDIO_ORDER")
+    sub_order = _user_value(listener, "AUTO_SUBTITLE_ORDER")
+    if not audio_order and not sub_order:
+        return up_path
+
+    changed = 0
+    for video in await _video_files(up_path):
+        audio_tracks, sub_tracks = await probe_streams(video)
+        state = _base_state(str(listener.mid), ospath.basename(video), audio_tracks, sub_tracks)
+        state["audio_order_value"] = audio_order or ""
+        state["sub_order_value"] = sub_order or ""
+        await _next_process_step(listener, "Ordering tracks", video)
+        new_path = await _execute_vt_pipeline(listener, video, state)
+        if new_path and new_path != video and up_path == video:
+            up_path = new_path
+        changed += 1
+
+    if changed and _quiet_messages():
+        await send_message(
+            listener.message,
+            "<b>Video Processing Plan</b>\n\n"
+            f"• Track Order: {changed} file(s)\n"
+            f"• Audio Order: <code>{audio_order or 'Default'}</code>\n"
+            f"• Subtitle Order: <code>{sub_order or 'Default'}</code>\n"
+            "• FFmpeg Queue: Completed\n\n"
+            "Processing Finished Successfully",
+        )
+    return up_path
+
+
+async def _auto_keep_streams(listener, up_path):
+    keep_audio = _lang_set(_user_value(listener, "AUTO_KEEP_AUDIO_LANGS"))
+    keep_sub = _lang_set(_user_value(listener, "AUTO_KEEP_SUBTITLE_LANGS"))
+    if not keep_audio and not keep_sub:
+        return up_path
+
+    changed = 0
+    for video in await _video_files(up_path):
+        audio_tracks, sub_tracks = await probe_streams(video)
+        state = _base_state(str(listener.mid), ospath.basename(video), audio_tracks, sub_tracks)
+        if keep_audio:
+            audio_keep = [
+                t["index"] for t in audio_tracks if _lang_matches(t["lang"], keep_audio)
+            ]
+            if audio_tracks and not audio_keep:
+                await send_message(
+                    listener.message,
+                    f"Keep Audios skipped for <code>{ospath.basename(video)}</code>: no matching audio language found for <code>{', '.join(sorted(keep_audio))}</code>.",
+                )
+                continue
+            state["keep_audio"] = audio_keep
+        if keep_sub:
+            sub_keep = [
+                t["index"] for t in sub_tracks if _lang_matches(t["lang"], keep_sub)
+            ]
+            if sub_tracks and not sub_keep:
+                await send_message(
+                    listener.message,
+                    f"Keep Subtitles warning for <code>{ospath.basename(video)}</code>: no matching subtitle language found for <code>{', '.join(sorted(keep_sub))}</code>.",
+                )
+            else:
+                state["keep_sub"] = sub_keep
+        if state["keep_audio"] or state["keep_sub"]:
+            await _next_process_step(listener, "Keeping selected streams", video)
+            new_path = await _execute_vt_pipeline(listener, video, state)
+            if new_path and new_path != video and up_path == video:
+                up_path = new_path
+            changed += 1
+
+    if changed and _quiet_messages():
+        await send_message(
+            listener.message,
+            "<b>Video Processing Plan</b>\n\n"
+            f"• Keep Streams: {changed} file(s)\n"
+            f"• Keep Audios: <code>{', '.join(sorted(keep_audio)) or 'Not Set'}</code>\n"
+            f"• Keep Subtitles: <code>{', '.join(sorted(keep_sub)) or 'Not Set'}</code>\n"
+            "• FFmpeg Queue: Completed\n\n"
+            "Processing Finished Successfully",
+        )
+    return up_path
+
+
 async def _auto_remove_streams(listener, up_path):
+    if _has_keep_filters(listener) or _user_value(listener, "AUTO_AUDIO_ORDER") or _user_value(listener, "AUTO_SUBTITLE_ORDER") or bool_setting(listener, "AUTO_ORDER"):
+        await send_message(
+            listener.message,
+            "Auto Remove Streams skipped: Auto Remove cannot run together with Keep/Order settings.",
+        )
+        return up_path
+    await send_message(
+        listener.message,
+        "Auto Remove Streams skipped: no remove list is configured. Use Auto -vt or manual -vt to select streams.",
+    )
+    return up_path
+
     keep_audio = _lang_set(_user_value(listener, "AUTO_KEEP_AUDIO_LANGS"))
     keep_sub = _lang_set(_user_value(listener, "AUTO_KEEP_SUBTITLE_LANGS"))
     audio_order = _user_value(listener, "AUTO_AUDIO_ORDER")

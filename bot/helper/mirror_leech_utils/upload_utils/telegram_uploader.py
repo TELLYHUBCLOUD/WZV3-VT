@@ -51,6 +51,7 @@ from ...ext_utils.media_utils import (
     get_audio_thumbnail,
     get_document_type,
     get_final_poster_url,
+    get_telegram_document_thumb,
     get_media_info,
     get_multiple_frames_thumbnail,
     get_video_thumbnail,
@@ -212,8 +213,6 @@ class TelegramUploader:
         )
         if auto_process_enabled:
             autorename_enabled = bool(autorename_enabled)
-        if getattr(self._listener, "video_tool", False):
-            autorename_enabled = False
 
         merge_range_name = re_match(r"^\[S\d+-EP\(\d+-\d+\)\]", file_, IGNORECASE)
 
@@ -664,6 +663,7 @@ class TelegramUploader:
         ):
             self._thumb = None
         thumb = self._thumb
+        doc_thumb = None
         self._is_corrupted = False
         route = None
         key = ""
@@ -730,6 +730,8 @@ class TelegramUploader:
             f_size = await aiopath.getsize(self._up_path)
             route = await starfallx_upload.acquire_route(self._listener, f_size)
             self._active_route = route
+            if getattr(route, "notice", ""):
+                await send_message(self._listener.message, route.notice)
 
             if (
                 self._listener.as_doc
@@ -746,15 +748,18 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
+                if thumb:
+                    doc_thumb = await get_telegram_document_thumb(thumb)
+                send_thumb = doc_thumb or thumb
                 if route.direct:
                     self._sent_msg = await self._send_direct_file(
-                        route, key, cap_mono, thumb=thumb
+                        route, key, cap_mono, thumb=send_thumb
                     )
                 else:
                     self._sent_msg = await self._sent_msg.reply_document(
                         document=self._up_path,
                         quote=True,
-                        thumb=thumb,
+                        thumb=send_thumb,
                         caption=cap_mono,
                         disable_content_type_detection=True,
                         disable_notification=True,
@@ -879,7 +884,7 @@ class TelegramUploader:
                         self._last_msg_in_group = True
                     queued_for_media_group = True
 
-            if self._sent_msg and not queued_for_media_group:
+            if self._sent_msg and not queued_for_media_group and not getattr(route, "direct_final", False):
                 self._queue_deferred_copy(self._sent_msg)
 
             if (
@@ -888,6 +893,12 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
+            if (
+                doc_thumb
+                and doc_thumb != thumb
+                and await aiopath.exists(doc_thumb)
+            ):
+                await remove(doc_thumb)
             await starfallx_upload.release_route(route)
             self._active_route = None
         except (FloodWait, FloodPremiumWait) as f:
@@ -902,6 +913,12 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
+            if (
+                doc_thumb
+                and doc_thumb != thumb
+                and await aiopath.exists(doc_thumb)
+            ):
+                await remove(doc_thumb)
             return await self._upload_file(cap_mono, file, o_path)
         except Exception as err:
             await starfallx_upload.release_route(route, failed=bool(route and route.direct))
@@ -912,6 +929,12 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
+            if (
+                doc_thumb
+                and doc_thumb != thumb
+                and await aiopath.exists(doc_thumb)
+            ):
+                await remove(doc_thumb)
             err_type = "RPCError: " if isinstance(err, RPCError) else ""
             LOGGER.error(f"{err_type}{err}. Path: {self._up_path}", exc_info=True)
             if isinstance(err, BadRequest) and key != "documents":

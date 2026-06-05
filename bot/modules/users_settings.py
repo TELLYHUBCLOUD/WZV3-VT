@@ -1,5 +1,6 @@
 import json
 from asyncio import sleep
+from contextlib import suppress
 from functools import partial
 from html import escape
 from io import BytesIO
@@ -368,7 +369,7 @@ Here I will explain how to use mltb.* which is reference to files you want to wo
     "lremname_auto": (
         "AutoRename Template",
         "AutoRename Template uses filename, caption, media metadata, TMDb, and AniList lookup.",
-        "Send AutoRename Template.\n<b>Variables:</b> <code>{file_name} {file_size} {file_caption} {languages} {subtitles} {duration} {ott} {resolution} {name} {title} {year} {quality} {season} {episode} {audio} {lib} {extension} {shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} {acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} {dynamic_range} {release_group} {group}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n<b>Timeout:</b> 60 sec",
+        "Send AutoRename Template.\n<b>Variables:</b> <code>{file_name} {file_size} {file_caption} {languages} {subtitles} {duration} {ott} {resolution} {name} {title} {year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} {shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} {acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} {dynamic_range} {release_group} {group}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {bit} {DS4K} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n<b>Timeout:</b> 60 sec",
     ),
     "lremname_regex": (
         "Regex Remname",
@@ -395,6 +396,7 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button("Auto Process", f"userset {user_id} autoprocess")
         buttons.data_button("FF Media Settings", f"userset {user_id} ffset")
         buttons.data_button("User Settings Zip", f"userset {user_id} zip")
+        buttons.data_button("Import Settings Zip", f"userset {user_id} zipimport")
         buttons.data_button(
             "Mics Settings", f"userset {user_id} advanced", position="l_body"
         )
@@ -484,17 +486,49 @@ Tokens are masked in settings and backup zip."""
 PIN lock is enabled.
 Unlock to view, add, test, remove, or export helper token data."""
         else:
-            buttons.data_button("Token List", f"userset {user_id} userbot")
-            buttons.data_button("Backup Token List", f"userset {user_id} userbot")
+            buttons.data_button("Token List", f"userset {user_id} userbot_tokens")
+            buttons.data_button("Backup Token List", f"userset {user_id} userbot_backups")
             buttons.data_button("Add Token", f"userset {user_id} helperadd")
             buttons.data_button("Test Tokens", f"userset {user_id} helpertest")
             buttons.data_button("Remove Token", f"userset {user_id} helperremove")
             buttons.data_button("Set Primary", f"userset {user_id} helpersetprimary")
-            buttons.data_button("Token Status", f"userset {user_id} userbot")
+            buttons.data_button("Token Status", f"userset {user_id} userbot_status")
             if pin_required:
                 buttons.data_button("Lock PIN", f"userset {user_id} helperlock")
             text = starfallx_upload.format_user_status(user_id)
         buttons.data_button("Back", f"userset {user_id} general", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(1)
+
+    elif stype in {"userbot_tokens", "userbot_backups", "userbot_status"}:
+        records = starfallx_upload.get_user_token_records(user_id)
+        if stype == "userbot_tokens":
+            selected = [record for record in records if record.get("primary")] or records[:1]
+            title = "Helper Token List"
+        elif stype == "userbot_backups":
+            selected = [record for record in records if not record.get("primary")]
+            title = "Backup Helper Tokens"
+        else:
+            selected = records
+            title = "Helper Token Status"
+
+        lines = [f"<b>{title}</b>", ""]
+        if not selected:
+            lines.append("No helper tokens saved in this list.")
+        else:
+            for index, record in enumerate(selected, start=1):
+                username = record.get("username") or "Not Tested"
+                status = record.get("status") or "Not Tested"
+                primary = "Primary" if record.get("primary") else "Backup"
+                lines.append(
+                    f"{index}. @{escape(str(username))} - "
+                    f"<code>{escape(str(record.get('mask') or 'Masked'))}</code>"
+                )
+                lines.append(f"   {primary} | {escape(str(status))}")
+                if record.get("last_error") and status not in {"Ready", "Direct Only"}:
+                    lines.append(f"   Error: <code>{escape(str(record.get('last_error'))[:140])}</code>")
+        text = "\n".join(lines)
+        buttons.data_button("Back", f"userset {user_id} userbot", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(1)
 
@@ -559,6 +593,14 @@ Unlock to view, add, test, remove, or export helper token data."""
         autorename_status = "Enabled" if enabled("AUTORENAME") else "Disabled"
         complete_msg = "Enabled" if enabled("LEECH_COMPLETE_MSG") else "Disabled"
         sequential_leech = "Enabled" if enabled("SEQUENTIAL_LEECH") else "Disabled"
+        premium_status = "Yes" if TgClient.IS_PREMIUM_USER else "No"
+        user_upload = bool(TgClient.IS_PREMIUM_USER and enabled("USER_TRANSMISSION"))
+        hybrid_upload = bool(TgClient.IS_PREMIUM_USER and enabled("HYBRID_LEECH"))
+        premium_upload_enabled = user_upload or hybrid_upload
+        upload_mode = "Hybrid" if hybrid_upload else ("User" if user_upload else "Bot")
+        effective_split = (
+            TgClient.MAX_SPLIT_SIZE if premium_upload_enabled else 2097152000
+        )
 
         buttons.data_button("Thumbnail", f"userset {user_id} menu THUMBNAIL")
         buttons.data_button("Leech Split Size", f"userset {user_id} menu LEECH_SPLIT_SIZE")
@@ -571,6 +613,15 @@ Unlock to view, add, test, remove, or export helper token data."""
             f"{tick('AS_DOCUMENT')}Send As Document",
             f"userset {user_id} tog AS_DOCUMENT {'f' if enabled('AS_DOCUMENT') else 't'}",
         )
+        if TgClient.IS_PREMIUM_USER:
+            buttons.data_button(
+                "✅ Leech by User" if user_upload else "Leech by Bot",
+                f"userset {user_id} tog USER_TRANSMISSION {'f' if user_upload else 't'}",
+            )
+            buttons.data_button(
+                f"{tick('HYBRID_LEECH')}Hybrid Leech",
+                f"userset {user_id} tog HYBRID_LEECH {'f' if hybrid_upload else 't'}",
+            )
         buttons.data_button(
             f"{tick('AUTO_THUMBNAIL')}Auto Thumbnail",
             f"userset {user_id} tog AUTO_THUMBNAIL {'f' if enabled('AUTO_THUMBNAIL') else 't'}",
@@ -599,6 +650,9 @@ Unlock to view, add, test, remove, or export helper token data."""
 Name: {user_name}
 
 Leech Type: <b>{ltype}</b>
+Premium User: <b>{premium_status}</b>
+Upload Mode: <b>{upload_mode}</b>
+Max Split Size: <b>{get_readable_file_size(effective_split)}</b>
 Custom Thumbnail: <b>{thumbmsg}</b>
 Leech Split Size: <b>{get_readable_file_size(split_size)}</b>
 Leech Destination: <code>{escape(str(leech_dest))}</code>
@@ -845,13 +899,22 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
                 and getattr(Config, key, False)
             )
 
+        def value_set(key):
+            value = user_dict.get(key)
+            if value is None:
+                value = getattr(Config, key, "")
+            return bool(str(value or "").strip())
+
         toggles = [
             ("AUTO_PROCESS", "Auto Process"),
             ("AUTO_LEECH", "Auto Leech"),
             ("AUTO_UNZIP", "Auto Unzip"),
+            ("AUTO_VT", "Auto -vt"),
+            ("AUTO_ORDER", "Auto Order"),
             ("AUTO_REMOVE_STREAMS", "Auto Remove Streams"),
             ("AUTO_MERGE", "Auto Merge"),
             ("AUTO_INTRO_SUBTITLE", "Intro Subtitle"),
+            ("AUTO_METADATA", "Metadata"),
         ]
         status_lines = []
         for key, label in toggles:
@@ -863,60 +926,48 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
             status_lines.append(f"• {label}: <b>{'On' if state else 'Off'}</b>")
 
         buttons.data_button(
-            "Keep Audios", f"userset {user_id} menu AUTO_KEEP_AUDIO_LANGS"
+            f"{'🟢' if value_set('AUTO_KEEP_AUDIO_LANGS') else '⚪'} Keep Audios",
+            f"userset {user_id} menu AUTO_KEEP_AUDIO_LANGS",
         )
         buttons.data_button(
-            "Keep Subtitles", f"userset {user_id} menu AUTO_KEEP_SUBTITLE_LANGS"
+            f"{'🟢' if value_set('AUTO_KEEP_SUBTITLE_LANGS') else '⚪'} Keep Subtitles",
+            f"userset {user_id} menu AUTO_KEEP_SUBTITLE_LANGS",
         )
         buttons.data_button(
-            "Audios Order", f"userset {user_id} menu AUTO_AUDIO_ORDER"
+            f"{'🟢' if value_set('AUTO_AUDIO_ORDER') else '⚪'} Audios Order",
+            f"userset {user_id} menu AUTO_AUDIO_ORDER",
         )
         buttons.data_button(
-            "Subtitles Order", f"userset {user_id} menu AUTO_SUBTITLE_ORDER"
+            f"{'🟢' if value_set('AUTO_SUBTITLE_ORDER') else '⚪'} Subtitles Order",
+            f"userset {user_id} menu AUTO_SUBTITLE_ORDER",
         )
         buttons.data_button(
-            "Merge Filename", f"userset {user_id} menu AUTO_MERGE_FILENAME"
-        )
-        buttons.data_button(
-            "Intro Ranges", f"userset {user_id} menu INTRO_SUBTITLE_RANGES"
+            f"{'🟢' if value_set('INTRO_SUBTITLE_RANGES') else '⚪'} Intro Ranges",
+            f"userset {user_id} menu INTRO_SUBTITLE_RANGES",
         )
 
         keep_audio = user_dict.get("AUTO_KEEP_AUDIO_LANGS") or Config.AUTO_KEEP_AUDIO_LANGS or "Not Set"
         keep_sub = user_dict.get("AUTO_KEEP_SUBTITLE_LANGS") or Config.AUTO_KEEP_SUBTITLE_LANGS or "Not Set"
         audio_order = user_dict.get("AUTO_AUDIO_ORDER") or Config.AUTO_AUDIO_ORDER or "Default"
         sub_order = user_dict.get("AUTO_SUBTITLE_ORDER") or Config.AUTO_SUBTITLE_ORDER or "Default"
-        merge_name = user_dict.get("AUTO_MERGE_FILENAME") or Config.AUTO_MERGE_FILENAME or "Detected title"
         intro_ranges = user_dict.get("INTRO_SUBTITLE_RANGES") or Config.INTRO_SUBTITLE_RANGES or "Not Set"
 
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(2)
 
-        text = f"""âŒ¬ <b>Auto Process :</b>
-â”Ÿ <b>Name</b> â†’ {user_name}
-â”ƒ
-{chr(10).join(status_lines)}
-â”  Keep Audio â†’ <code>{escape(str(keep_audio))}</code>
-â”  Keep Subtitles â†’ <code>{escape(str(keep_sub))}</code>
-â”– Merge Filename â†’ <code>{escape(str(merge_name))}</code>
-
-Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
-
-<i>Order: download - unzip - remove streams - smart merge - intro subtitle - metadata - auto rename - sequential upload.</i>
-"""
         text = f"""<b>Auto Process</b>
 <b>Name:</b> {user_name}
 
 {chr(10).join(status_lines)}
 
-Keep Audios: <code>{escape(str(keep_audio))}</code>
-Keep Subtitles: <code>{escape(str(keep_sub))}</code>
-Audios Order: <code>{escape(str(audio_order))}</code>
-Subtitles Order: <code>{escape(str(sub_order))}</code>
-Merge Filename: <code>{escape(str(merge_name))}</code>
-Intro Ranges: <code>{escape(str(intro_ranges))}</code>
+Keep Audios -> <code>{escape(str(keep_audio))}</code>
+Keep Subtitles -> <code>{escape(str(keep_sub))}</code>
+Audios Order -> <code>{escape(str(audio_order))}</code>
+Subtitles Order -> <code>{escape(str(sub_order))}</code>
+Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
 
-<i>Order: download - unzip - remove streams/order tracks - smart merge - intro subtitle - metadata - auto rename - sequential upload.</i>
+<i>Order: download - unzip - order tracks - remove streams - smart merge - intro subtitle - metadata - auto rename - sequential upload.</i>
 """
 
     elif stype == "uphoster":
@@ -1405,6 +1456,25 @@ async def set_option(_, message, option, rfunc):
     user_id = message.from_user.id
     handler_dict[user_id] = False
     value = message.text
+    auto_remove_enabled = user_data.get(user_id, {}).get(
+        "AUTO_REMOVE_STREAMS", Config.AUTO_REMOVE_STREAMS
+    )
+    if (
+        option
+        in {
+            "AUTO_KEEP_AUDIO_LANGS",
+            "AUTO_KEEP_SUBTITLE_LANGS",
+            "AUTO_AUDIO_ORDER",
+            "AUTO_SUBTITLE_ORDER",
+        }
+        and str(value or "").strip()
+        and auto_remove_enabled
+    ):
+        await send_message(
+            message,
+            "Auto Remove Streams is enabled. Disable it before setting Keep/Order values.",
+        )
+        return
     if option == "LEECH_SPLIT_SIZE":
         if not value.isdigit():
             value = get_size_bytes(value)
@@ -1504,14 +1574,17 @@ def _reverse_autorename_template(sample):
     stem = str(sample or "").strip()
     if "." in stem:
         stem = ".".join(stem.split(".")[:-1]) or stem
-    has_episode = bool(search(r"(?i)S\d{1,2}\s*E\d{1,3}", stem))
-    has_year = bool(search(r"\b(19\d{2}|20\d{2}|21\d{2})\b", stem))
-    has_resolution = bool(search(r"(?i)\b(2160p|1080p|720p|480p)\b", stem))
-    has_bit = bool(search(r"(?i)\b10\s*bit\b", stem))
-    has_ott = bool(search(r"(?i)\b(NF|AMZN|DSNP|JHS|IMAX|HBO|CR)\b", stem))
-    has_quality = bool(search(r"(?i)\b(WEB[- ]?DL|WEB[- ]?Rip|BluRay|HDRip|DS4K)\b", stem))
-    has_codec = bool(search(r"(?i)\b(x265|x264|h265|h264|hevc|av1)\b", stem))
-    has_audio = bool(search(r"(?i)\[(?:[^\]]*?(DDP|EAC3|AC3|AAC|DTS|TrueHD)[^\]]*?)\]", stem))
+    normalized = sub(r"[._]+", " ", stem)
+    normalized = sub(r"\s+", " ", normalized).strip()
+    has_episode = bool(search(r"(?i)S\d{1,2}\s*E\d{1,4}", normalized))
+    has_year = bool(search(r"\b(19\d{2}|20\d{2}|21\d{2})\b", normalized))
+    has_resolution = bool(search(r"(?i)\b(2160p|1080p|720p|480p)\b", normalized))
+    has_bit = bool(search(r"(?i)\b(10|12)\s*bit\b", normalized))
+    has_ott = bool(search(r"(?i)\b(NF|AMZN|DSNP|JHS|IMAX|HBO|CR)\b", normalized))
+    has_quality = bool(search(r"(?i)\b(WEB[- ]?DL|WEB[- ]?Rip|BluRay|BDRip|BRRip|HDRip)\b", normalized))
+    has_ds4k = bool(search(r"(?i)\bDS4K\b", normalized))
+    has_codec = bool(search(r"(?i)\b(x265|x264|h265|h264|hevc|av1)\b", normalized))
+    has_audio = bool(search(r"(?i)(DDP|EAC3|AC3|AAC|DTS|TrueHD|Opus|FLAC)(?:\s|-)*(2\.0|5\.1|7\.1|2 0|5 1|7 1)?", normalized))
     has_sub = bool(search(r"(?i)\b([EMS]?Sub|ESub|MSub)\b", stem))
     has_group = bool(search(r"\s~\s*[\w.-]+$", stem))
 
@@ -1529,6 +1602,8 @@ def _reverse_autorename_template(sample):
         parts.append("{ott}")
     if has_quality:
         parts.append("{quality}")
+    if has_ds4k:
+        parts.append("{DS4K}")
     if has_codec:
         parts.append("{codec}")
     if has_audio:
@@ -1805,6 +1880,65 @@ async def send_user_settings_zip(message, user_id, user_dict):
     await send_file(message, archive, "User settings backup")
 
 
+def _safe_import_user_settings(settings):
+    deny_keys = {
+        HELPER_TOKENS_KEY,
+        HELPER_PIN_HASH_KEY,
+        USER_BOT_TOKEN_KEY,
+        "USER_UPLOAD_BOT_META",
+        "USER_SESSION_STRING",
+        "BOT_TOKEN",
+        "DATABASE_URL",
+    }
+    safe = {}
+    for key, value in (settings or {}).items():
+        key_u = str(key).upper()
+        if key in deny_keys:
+            continue
+        if any(secret in key_u for secret in ("PASSWORD", "COOKIE", "SECRET")):
+            continue
+        if "TOKEN" in key_u and not isinstance(value, bool):
+            continue
+        if key_u.endswith("_KEY") and not isinstance(value, bool):
+            continue
+        if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+            safe[key] = value
+    return safe
+
+
+@new_task
+async def import_user_settings_zip(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    doc = message.document
+    if not doc or not str(doc.file_name or "").lower().endswith(".zip"):
+        await send_message(message, "Send a valid user settings .zip backup.")
+        await rfunc()
+        return
+    file_path = await message.download()
+    try:
+        with ZipFile(file_path) as zf:
+            with zf.open("user_settings.json") as fp:
+                payload = json.loads(fp.read().decode("utf-8"))
+        settings = _safe_import_user_settings(payload.get("settings", {}))
+        if not settings:
+            await send_message(message, "No safe user settings found to import.")
+        else:
+            user_data.setdefault(user_id, {}).update(settings)
+            await database.update_user_data(user_id)
+            await send_message(
+                message,
+                f"Imported {len(settings)} safe user settings. Helper tokens and secrets were skipped.",
+            )
+    except Exception as e:
+        await send_message(message, f"Settings import failed: <code>{escape(str(e))}</code>")
+    finally:
+        with suppress(Exception):
+            await remove(file_path)
+    await delete_message(message)
+    await rfunc()
+
+
 @new_task
 async def edit_user_settings(client, query):
     from_user = query.from_user
@@ -1835,6 +1969,20 @@ async def edit_user_settings(client, query):
             return
         await query.answer("Preparing zip backup...")
         await send_user_settings_zip(message, user_id, user_dict)
+    elif data[2] == "zipimport":
+        await query.answer()
+        buttons = ButtonMaker()
+        buttons.data_button("Stop", f"userset {user_id} back")
+        buttons.data_button("Back", f"userset {user_id} back", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        await edit_message(
+            message,
+            "Send your user settings backup .zip.\nRaw helper tokens, PINs, cookies, passwords, and API keys will not be imported.\nTimeout: 60 sec",
+            buttons.build_menu(1),
+        )
+        rfunc = partial(update_user_settings, query, "main")
+        pfunc = partial(import_user_settings_zip, rfunc=rfunc)
+        await event_handler(client, query, pfunc, rfunc)
     elif data[2] == "font":
         await query.answer()
         current = user_dict.get("LEECH_FONT", Config.LEECH_FONT) or ""
@@ -1848,6 +1996,9 @@ async def edit_user_settings(client, query):
         "mirror",
         "leech",
         "userbot",
+        "userbot_tokens",
+        "userbot_backups",
+        "userbot_status",
         "autoprocess",
         "uphoster",
         "gofile",
@@ -1962,14 +2113,42 @@ async def edit_user_settings(client, query):
         text = f"""⌬ <b>Select Uphoster Destinations :</b>"""
         await edit_message(message, text, buttons.build_menu(1))
     elif data[2] == "menu":
+        if data[3] in {
+            "AUTO_KEEP_AUDIO_LANGS",
+            "AUTO_KEEP_SUBTITLE_LANGS",
+            "AUTO_AUDIO_ORDER",
+            "AUTO_SUBTITLE_ORDER",
+        } and user_data.get(user_id, {}).get("AUTO_REMOVE_STREAMS", Config.AUTO_REMOVE_STREAMS):
+            await query.answer(
+                "Disable Auto Remove Streams before setting Keep/Order values.",
+                show_alert=True,
+            )
+            return
         await query.answer()
         await get_menu(data[3], message, user_id)
     elif data[2] == "tog":
+        key = data[3]
+        enabling = data[4] == "t"
+        if key == "AUTO_ORDER" and enabling and user_data.get(user_id, {}).get("AUTO_REMOVE_STREAMS", Config.AUTO_REMOVE_STREAMS):
+            await query.answer(
+                "Disable Auto Remove Streams before enabling Auto Order.",
+                show_alert=True,
+            )
+            return
         await query.answer()
         if data[3] == "RENAME_METHOD":
             update_user_ldata(user_id, data[3], data[4])
         else:
             update_user_ldata(user_id, data[3], data[4] == "t")
+        if key == "AUTO_REMOVE_STREAMS" and enabling:
+            for conflict_key in (
+                "AUTO_KEEP_AUDIO_LANGS",
+                "AUTO_KEEP_SUBTITLE_LANGS",
+                "AUTO_AUDIO_ORDER",
+                "AUTO_SUBTITLE_ORDER",
+            ):
+                update_user_ldata(user_id, conflict_key, "")
+            update_user_ldata(user_id, "AUTO_ORDER", False)
         if data[3] == "STOP_DUPLICATE":
             back_to = "gdrive"
         elif data[3] in ["USER_TOKENS", "USE_DEFAULT_COOKIE"]:

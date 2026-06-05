@@ -13,6 +13,31 @@ def _selected_icon(selected):
     return "🟢 " if selected else ""
 
 
+def _has_extract_selection(state):
+    return bool(state.get("extract_audio") or state.get("extract_sub"))
+
+
+def _clear_non_extract_tools(state):
+    for key in (
+        "remove_audio",
+        "remove_sub",
+        "merge_audio",
+        "merge_sub",
+        "translate_sub",
+        "keep_audio",
+        "keep_sub",
+        "audio_order",
+        "sub_order",
+    ):
+        state[key] = []
+    state["audio_order_value"] = ""
+    state["sub_order_value"] = ""
+    state["default_audio"] = None
+    state["default_sub"] = None
+    state["intro_subtitle"] = False
+    state["video_merge"] = False
+
+
 def _tracks_for(state, action_key):
     if action_key == "merge_audio":
         return state.get("external_audio", [])
@@ -30,6 +55,7 @@ def _track_text(track):
 
 
 async def render_video_tools_main(vt_msg, state):
+    extract_selected = _has_extract_selection(state)
     text = (
         "<b>Video Tools Configuration</b>\n\n"
         f"<b>File:</b> <code>{state['filename']}</code>\n\n"
@@ -41,21 +67,22 @@ async def render_video_tools_main(vt_msg, state):
         f"<b>Timeout:</b> {UI_TIMEOUT} sec"
     )
     task_id = state["task_id"]
-    markup = InlineKeyboardMarkup(
-        [
+    if extract_selected:
+        text += "\n\n<b>Extract mode:</b> enabled. Other Video Tools actions are disabled."
+        rows = [
+            [InlineKeyboardButton("🟢 Extract Stream", callback_data=f"vt_extract_{task_id}")],
+            [
+                InlineKeyboardButton("Done", callback_data=f"vt_done_{task_id}"),
+                InlineKeyboardButton("Close", callback_data=f"vt_close_{task_id}"),
+            ],
+        ]
+    else:
+        rows = [
             [
                 InlineKeyboardButton("Remove Stream", callback_data=f"vt_remove_{task_id}"),
                 InlineKeyboardButton("Extract Stream", callback_data=f"vt_extract_{task_id}"),
             ],
-            [
-                InlineKeyboardButton("Keep Audios", callback_data=f"vt_keepaudio_{task_id}"),
-                InlineKeyboardButton("Keep Subtitles", callback_data=f"vt_keepsub_{task_id}"),
-            ],
             [InlineKeyboardButton("Change Order", callback_data=f"vt_order_{task_id}")],
-            [
-                InlineKeyboardButton("Default Audio", callback_data=f"vt_defa_{task_id}"),
-                InlineKeyboardButton("Default Subtitle", callback_data=f"vt_defs_{task_id}"),
-            ],
             [
                 InlineKeyboardButton("Merge Tracks", callback_data=f"vt_merge_{task_id}"),
                 InlineKeyboardButton("Translate Subs", callback_data=f"vt_translate_{task_id}"),
@@ -66,7 +93,7 @@ async def render_video_tools_main(vt_msg, state):
                 InlineKeyboardButton("Close", callback_data=f"vt_close_{task_id}"),
             ],
         ]
-    )
+    markup = InlineKeyboardMarkup(rows)
     try:
         await vt_msg.edit(text, reply_markup=markup)
     except Exception as e:
@@ -226,12 +253,18 @@ async def video_tools_callback(_, query):
             return
 
         if action == "removego":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with other tools.", show_alert=True)
+                return
             state["completed"] = True
             event.set()
             await query.message.edit_text("<b>Video Tools:</b> removing selected streams...")
             return
 
         if action == "video":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Video + Video.", show_alert=True)
+                return
             state["video_merge"] = True
             state["completed"] = True
             event.set()
@@ -243,46 +276,77 @@ async def video_tools_callback(_, query):
             return
 
         if action == "remove":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Remove Stream.", show_alert=True)
+                return
             await render_stream_type_menu(query, task_id, "remove", "Remove Stream")
             return
 
         if action == "extract":
+            _clear_non_extract_tools(state)
             await render_stream_type_menu(query, task_id, "extract", "Extract Stream")
             return
 
         if action == "merge":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Merge Tracks.", show_alert=True)
+                return
             await start_merge_track_intake(query.message, state, event)
             return
 
         if action == "translate":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Translate Subs.", show_alert=True)
+                return
             await render_stream_list(query, state, "translate_sub", "Translate Subtitles")
             return
 
         if action == "keepaudio":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Keep Audios.", show_alert=True)
+                return
             await render_stream_list(query, state, "keep_audio", "Keep Audios")
             return
 
         if action == "keepsub":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Keep Subtitles.", show_alert=True)
+                return
             await render_stream_list(query, state, "keep_sub", "Keep Subtitles")
             return
 
         if action == "order":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Change Order.", show_alert=True)
+                return
             await render_change_order(query, state)
             return
 
         if action == "orderaudio":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Audio Order.", show_alert=True)
+                return
             await render_stream_list(query, state, "audio_order", "Audio Order")
             return
 
         if action == "ordersub":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Subtitle Order.", show_alert=True)
+                return
             await render_stream_list(query, state, "sub_order", "Subtitle Order")
             return
 
         if action == "defa":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Default Audio.", show_alert=True)
+                return
             await render_stream_list(query, state, "default_audio", "Default Audio")
             return
 
         if action == "defs":
+            if _has_extract_selection(state):
+                await query.answer("Extract Stream cannot be combined with Default Subtitle.", show_alert=True)
+                return
             await render_stream_list(query, state, "default_sub", "Default Subtitle")
             return
 
@@ -290,6 +354,9 @@ async def video_tools_callback(_, query):
             mode = parts[2]
             track_type = parts[3]
             action_key = f"{mode}_{track_type}"
+            if _has_extract_selection(state) and not action_key.startswith("extract_"):
+                await query.answer("Extract Stream cannot be combined with other tools.", show_alert=True)
+                return
             title = {
                 "remove_audio": "Remove Audio",
                 "remove_sub": "Remove Subtitle",
@@ -302,6 +369,9 @@ async def video_tools_callback(_, query):
         if action == "toggle":
             action_key = parts[2] + "_" + parts[3]
             idx_str = parts[4]
+            if _has_extract_selection(state) and not action_key.startswith("extract_"):
+                await query.answer("Extract Stream cannot be combined with other tools.", show_alert=True)
+                return
             tracks = _tracks_for(state, action_key)
             all_indices = [track["index"] for track in tracks]
 
@@ -330,6 +400,8 @@ async def video_tools_callback(_, query):
                         state["default_audio"] = None
                     if action_key == "remove_sub" and state.get("default_sub") == idx:
                         state["default_sub"] = None
+            if action_key.startswith("extract_") and state.get(action_key):
+                _clear_non_extract_tools(state)
 
             title_map = {
                 "remove_audio": "Remove Audio",

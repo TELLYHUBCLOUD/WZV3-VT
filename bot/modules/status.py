@@ -1,4 +1,5 @@
 from psutil import cpu_percent, virtual_memory, disk_usage
+from contextlib import suppress
 from time import time
 from asyncio import gather, iscoroutinefunction
 
@@ -87,7 +88,16 @@ async def get_download_status(download):
 @new_task
 async def status_pages(_, query):
     data = query.data.split()
-    key = int(data[1])
+    try:
+        key = int(data[1])
+    except (IndexError, ValueError):
+        with suppress(QueryIdInvalid):
+            await query.answer("Invalid status page.", show_alert=True)
+        return
+    if len(data) < 3:
+        with suppress(QueryIdInvalid):
+            await query.answer("Invalid status action.", show_alert=True)
+        return
     if data[2] == "ref":
         await update_status_message(key, force=True)
     elif data[2] in ["nex", "pre"]:
@@ -129,6 +139,9 @@ async def status_pages(_, query):
         seed_speed = 0
 
         async with task_dict_lock:
+            if not task_dict:
+                await query.answer("No active tasks.", show_alert=True)
+                return
             status_results = await gather(
                 *(get_download_status(download) for download in task_dict.values())
             )

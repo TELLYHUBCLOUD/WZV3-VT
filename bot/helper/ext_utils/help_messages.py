@@ -295,7 +295,7 @@ Notes:
 2. Range names use <code>[S1-EP(01-06)]</code> and never mix seasons.
 3. Subtitle translate uses LIBRE_TRANSLATE_API_URL and optional LIBRE_TRANSLATE_API_KEY from config.py.
 4. Intro subtitles use INTRO_SUBTITLE_RANGES and fade in/out as a muxed subtitle track.
-5. Auto rename and auto thumbnail use AniList, Jikan, Kitsu, TMDb, then filename/video-frame fallback.
+5. Auto rename and auto thumbnail use TMDb first, then AniList/MyAnimeList, then filename/video-frame fallback.
 6. AutoLeech can start leech tasks from plain links/files for authorized users when AUTO_LEECH is enabled.
 7. Caption <code>{filename}</code> keeps the full final name with prefix/suffix; <code>{upload_filename}</code> is the shortened Telegram filename.
 

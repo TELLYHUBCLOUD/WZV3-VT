@@ -18,7 +18,13 @@ from ..helper.ext_utils.links_utils import (
 from ..helper.ext_utils.status_utils import get_readable_file_size
 from ..helper.telegram_helper.bot_commands import BotCommands
 from ..helper.telegram_helper.message_utils import send_message
-from .batch_task_registry import BatchTaskController, get_batch_limits
+from .batch_task_registry import (
+    BatchTaskController,
+    finish_batch_plan,
+    get_batch_limits,
+    save_batch_plan,
+    update_batch_plan,
+)
 
 
 def _valid_link(value):
@@ -91,6 +97,7 @@ async def batch_leech(client, message):
         return
 
     controller = BatchTaskController("bleech", message)
+    await save_batch_plan(controller, {"links": links, "total": len(links)})
     dl_limit, up_limit = get_batch_limits("bleech")
     plan = [
         "<b>Batch Leech Planner</b>",
@@ -125,6 +132,7 @@ async def batch_leech(client, message):
             ):
                 link = links[next_index]
                 next_index += 1
+                await update_batch_plan(controller.gid, current_index=next_index)
                 active_downloads += 1
                 active_uploads += 1
                 started = True
@@ -182,4 +190,5 @@ async def batch_leech(client, message):
         LOGGER.error(f"Batch Leech failed: {e}", exc_info=True)
         await send_message(message, f"Batch Leech failed:\n<code>{escape(str(e))}</code>")
     finally:
+        await finish_batch_plan(controller.gid, cancelled=controller.cancelled)
         controller.close()

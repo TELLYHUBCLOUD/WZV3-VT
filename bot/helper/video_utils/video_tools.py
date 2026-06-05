@@ -371,6 +371,37 @@ def _srt_ts(seconds):
     return f"{h:02}:{m:02}:{s:02},000"
 
 
+def _ass_color(value):
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    if value.startswith("&H"):
+        return value
+    if value.startswith("#") and len(value) == 7:
+        r, g, b = value[1:3], value[3:5], value[5:7]
+        return f"&H00{b}{g}{r}"
+    return value
+
+
+def _colorize_ass_letters(text, palette):
+    colors = [_ass_color(item) for item in re.split(r"[\s,|]+", str(palette or "")) if item.strip()]
+    colors = [item for item in colors if item]
+    if not colors:
+        return text
+    out = []
+    index = 0
+    for char in text:
+        if char in {"\\", "{", "}"}:
+            out.append(char)
+            continue
+        if char.strip():
+            out.append(f"{{\\c{colors[index % len(colors)]}}}{char}")
+            index += 1
+        else:
+            out.append(char)
+    return "".join(out)
+
+
 async def _create_intro_subtitle(listener, dir_path):
     text = (
         listener.user_dict.get("INTRO_SUBTITLE_TEXT")
@@ -390,7 +421,9 @@ async def _create_intro_subtitle(listener, dir_path):
     size = int(getattr(Config, "INTRO_SUBTITLE_FONT_SIZE", 36) or 36)
     color = str(getattr(Config, "INTRO_SUBTITLE_COLOR", "&H00FFFFFF") or "&H00FFFFFF")
     outline = str(getattr(Config, "INTRO_SUBTITLE_OUTLINE_COLOR", "&H00000000") or "&H00000000")
+    palette = str(getattr(Config, "INTRO_SUBTITLE_COLOR_PALETTE", "") or "")
     safe_text = text.replace("\n", r"\N").replace("{", "(").replace("}", ")")
+    safe_text = _colorize_ass_letters(safe_text, palette)
     if not ranges:
         ranges = [(0, duration)]
     dialogues = []
@@ -717,7 +750,7 @@ async def _merge_video_directory(listener, root, videos):
         "• Video + Video Merge: Enabled",
         f"• Total Videos: {len(videos)}",
         "• Mode: Concat demuxer, stream copy",
-        "• Metadata/Intro/AutoRename: Skipped for manual -vt",
+        "• Extra stream tools: Skipped for Video + Video",
         "",
         "<b>Order</b>",
     ]

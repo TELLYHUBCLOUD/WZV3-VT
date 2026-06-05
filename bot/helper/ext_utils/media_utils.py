@@ -28,6 +28,31 @@ from .status_utils import get_readable_file_size, get_readable_time, time_to_sec
 
 _metadata_cache = {}
 
+UPLOADER_TAGS = (
+    "Toonworld4all",
+    "SubsPlease",
+    "EMBER",
+    "Erai-raws",
+    "HorribleSubs",
+    "AnimeRG",
+    "Judas",
+    "ASW",
+    "Anime Time",
+    "AnimeShrine",
+    "PSA",
+)
+
+TITLE_NOISE_PATTERN = (
+    r"\b(?:"
+    r"19\d{2}|20[0-3]\d|2160p|1080p|720p|480p|4K|DS4K|"
+    r"WEB\s?DL|WEB\s?Rip|WEBRIP|Blu\s?Ray|BRRip|BDRip|HDRip|HDTV|DVDRip|REMUX|"
+    r"DSNP|AMZN|NF|JHS|Hotstar|HBO|IMAX|CR|MULTI\d*|MULTi\d*|Dual|"
+    r"EAC3|E\s?AC3|DDP|AC3|AAC|DTS|TrueHD|Atmos|Opus|FLAC|MP3|"
+    r"HEVC|H265|H264|x265|x264|AV1|10bit|8bit|12bit|"
+    r"Tamil|Telugu|Hindi|English|Malayalam|Kannada|ESub|MSub|Sub"
+    r")\b"
+)
+
 
 def get_md5_hash(up_path):
     md5_hash = md5()
@@ -106,17 +131,15 @@ async def download_image_thumb(url, landscape=False):
             output = ospath.join(path, f"{time()}.jpg")
             def _process_thumb(src, dst):
                 with Image.open(src) as im:
-                    im = im.convert("RGB")
+                    im = ImageOps.exif_transpose(im).convert("RGB")
                     if landscape:
-                        im = ImageOps.fit(
-                            im,
-                            (1280, 720),
-                            method=Image.Resampling.LANCZOS,
-                            centering=(0.5, 0.5),
-                        )
+                        # Preserve provider composition. Telegram can use non-16:9
+                        # thumbnails, so only scale down oversized images.
+                        im.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
                     im.save(
                         dst, "JPEG", quality=_thumb_quality(), optimize=True
                     )
+                    LOGGER.info(f"Thumbnail source: provider -> {im.size[0]}x{im.size[1]}")
             try:
                 await sync_to_async(_process_thumb, tmp_path, output)
             except Exception as e:
@@ -390,7 +413,7 @@ async def get_video_thumbnail(video_file, duration):
         "-i",
         video_file,
         "-vf",
-        "thumbnail",
+        "thumbnail,scale='min(1280,iw)':-2",
         "-q:v",
         "1",
         "-frames:v",
@@ -409,9 +432,11 @@ async def get_video_thumbnail(video_file, duration):
             return None
         def _optimize_thumb(path):
             with Image.open(path) as im:
-                im.convert("RGB").save(
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                im.save(
                     path, "JPEG", quality=_thumb_quality(), optimize=True
                 )
+                LOGGER.info(f"Thumbnail source: FFmpeg frame -> {im.size[0]}x{im.size[1]}")
         await sync_to_async(_optimize_thumb, output)
     except Exception:
         LOGGER.error(
@@ -419,6 +444,30 @@ async def get_video_thumbnail(video_file, duration):
         )
         return None
     return output
+
+
+async def get_telegram_document_thumb(thumb_path):
+    """Create a Telegram-safe document thumbnail from an existing HD thumbnail."""
+    if not thumb_path or thumb_path == "none" or not await aiopath.exists(thumb_path):
+        return thumb_path
+    output_dir = f"{DOWNLOAD_DIR}thumbnails"
+    await makedirs(output_dir, exist_ok=True)
+    output = ospath.join(output_dir, f"{time()}_doc.jpg")
+
+    def _make_doc_thumb(src, dst):
+        with Image.open(src) as im:
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((320, 320), Image.Resampling.LANCZOS)
+            im.save(dst, "JPEG", quality=90, optimize=True)
+
+    try:
+        await sync_to_async(_make_doc_thumb, thumb_path, output)
+        return output
+    except Exception as e:
+        LOGGER.warning(f"Document thumb generation failed: {e}")
+        with suppress(Exception):
+            await remove(output)
+        return thumb_path
 
 
 async def get_multiple_frames_thumbnail(video_file, layout, keep_screenshots):
@@ -1000,7 +1049,6 @@ def _normalize_resolution(value):
 
 def _extract_source_quality(filename):
     quality_patterns = [
-        (r"\bDS4K\b", "DS4K"),
         (r"\bWEB[-\s.]?DL\b", "WEB-DL"),
         (r"\bWEB[-\s.]?Rip\b", "WEBRip"),
         (r"\bBlu[-\s.]?Ray\b", "BluRay"),
@@ -1047,7 +1095,6 @@ def _extract_codec_tag(filename):
 
 def _extract_ott_tag(filename):
     ott_patterns = [
-        (r"\bDS4K\b", "DS4K"),
         (r"\bDSNP\b|\bDisney(?:\+| Plus)?\b", "DSNP"),
         (r"\bJHS\b|\bJioHotstar\b", "JHS"),
         (r"\bHS\b|\bHotstar\b", "HS"),
@@ -1066,6 +1113,10 @@ def _extract_ott_tag(filename):
         if re.search(pattern, filename, re.IGNORECASE):
             return label
     return ""
+
+
+def _has_ds4k(filename):
+    return bool(re.search(r"\bDS4K\b", str(filename or ""), re.IGNORECASE))
 
 
 def _extract_release_group(filename):
@@ -1098,16 +1149,41 @@ def _extract_release_group(filename):
     return ""
 
 
+def _normalize_channel_tag(value):
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    text = text.replace("_", ".").replace("-", ".")
+    text = re.sub(r"\.+", ".", text).strip(".")
+    if text in {"2", "2ch", "2.0", "20"}:
+        return "2.0"
+    if text in {"6", "6ch", "5.1", "51"}:
+        return "5.1"
+    if text in {"8", "8ch", "7.1", "71"}:
+        return "7.1"
+    match = re.match(r"^([257])\.?([01])", text)
+    if match:
+        return f"{match.group(1)}.{match.group(2)}"
+    return text.upper()
+
+
 def _extract_audio_tag(filename):
+    channel_pattern = (
+        r"2[\s._-]*(?:\.|_)?[\s._-]*0|"
+        r"5[\s._-]*(?:\.|_)?[\s._-]*1|"
+        r"7[\s._-]*(?:\.|_)?[\s._-]*1|"
+        r"[268][\s._-]*CH"
+    )
     match = re.search(
-        r"\b(E[-\s.]?AC[-\s.]?3|DDP|DD\+|AAC|DTS[-\s.]?HD|DTS|TrueHD|Atmos|Opus|FLAC|MP3)(?:[\s._-]*(2\.0|5\.1|7\.1|[26]CH))?",
+        rf"\b(E[-\s.]?AC[-\s.]?3|DDP|DD\+|AAC|DTS[-\s.]?HD|DTS|TrueHD|Atmos|Opus|FLAC|MP3)(?:[\s._-]*({channel_pattern}))?",
         filename,
         re.IGNORECASE,
     )
     if not match:
         return ""
     codec = match.group(1).replace(" ", "").replace(".", "").replace("-", "").upper()
-    channels = (match.group(2) or "").upper()
+    channels = _normalize_channel_tag(match.group(2))
     return f"{codec} {channels}".strip()
 
 
@@ -1223,11 +1299,16 @@ async def _extract_mediainfo_rename_info(filepath):
         title = f"{track.get('Title', '')} {track.get('CommercialName', '')}".lower()
         acodec = _normalize_audio_codec(fmt)
         channels = (
-            track.get("ChannelLayout")
-            or track.get("Channels/String")
+            track.get("Channels/String")
             or _normalize_channels_count(track.get("Channels"))
+            or track.get("ChannelLayout")
         )
-        channels = str(channels or "").replace(" channels", "").replace(" ", "")
+        channels = _normalize_channel_tag(
+            str(channels or "")
+            .replace(" channels", "")
+            .replace("channel(s)", "")
+            .replace(" ", "")
+        )
         if channels.isdigit():
             channels = _normalize_channels_count(channels)
         bitrate = _pretty_bitrate(
@@ -1298,14 +1379,28 @@ async def _enrich_template_metadata(metadata, filename, filepath=None, extra=Non
     metadata["shortsub"] = metadata.get("shortsub") or _short_subtitle_tag(
         metadata.get("subtitles", ""), filename
     )
-    if metadata.get("quality") == "DS4K":
-        metadata["resolution"] = ""
-        metadata["bit"] = ""
+    metadata["DS4K"] = metadata.get("DS4K") or ("DS4K" if _has_ds4k(filename) else "")
+    for key in (
+        "file_name", "file_size", "file_caption", "languages", "subtitles",
+        "duration", "ott", "resolution", "name", "title", "year", "quality",
+        "season", "episode", "audio", "lib", "extension", "shortsub",
+        "shortlang", "part", "raw_name", "link", "vcodec", "codec", "acodec",
+        "audio_codec", "audio_channels", "audio_bitrate", "hdr",
+        "dynamic_range", "release_group", "group", "DS4K", "bit", "size",
+    ):
+        metadata.setdefault(key, "")
     return metadata
 
 
 def _clean_title_from_filename(filename):
     stem = Path(filename).stem
+    uploader_pattern = "|".join(re.escape(tag) for tag in UPLOADER_TAGS)
+    stem = re.sub(
+        rf"^\[(?:{uploader_pattern})\]\s*",
+        "",
+        stem,
+        flags=re.IGNORECASE,
+    )
     stem = re.sub(r"(?:^|\s)-\s*[A-Za-z0-9][A-Za-z0-9._-]{1,30}$", "", stem)
     title = re.sub(r"[\[\](){}]", " ", stem)
     title = title.replace(".", " ").replace("_", " ").replace("-", " ")
@@ -1318,9 +1413,8 @@ def _clean_title_from_filename(filename):
     if sxe:
         title = title[: sxe.start()] if sxe.start() > 0 else title[sxe.end():]
 
-    tech_pattern = r"\b(?:19\d{2}|20[0-3]\d|2160p|1080p|720p|480p|4K|WEB\s?DL|WEB\s?Rip|Blu\s?Ray|BRRip|BDRip|HDRip|HDTV|DVDRip|DS4K|DSNP|AMZN|NF|JHS|Hotstar|MULTi|EAC3|E AC3|AC3|AAC|DTS|Atmos|HEVC|H265|H264|x265|x264|10bit|8bit|12bit|Tamil|Hindi|English|ESub)\b"
     parts = re.split(
-        tech_pattern,
+        TITLE_NOISE_PATTERN,
         title,
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -1328,7 +1422,7 @@ def _clean_title_from_filename(filename):
     title = parts[0]
     if not title.strip() and len(parts) > 1:
         title = re.sub(
-            rf"^(?:\s*{tech_pattern}\s*)+",
+            rf"^(?:\s*{TITLE_NOISE_PATTERN}\s*)+",
             "",
             " ".join(parts[1:]),
             flags=re.IGNORECASE,
@@ -1584,33 +1678,63 @@ async def _fetch_anilist_media(title):
     if cache_key in _metadata_cache:
         return _metadata_cache[cache_key]
     query = """
-    query ($search: String) {
-      Media(search: $search, type: ANIME) {
-        title { english romaji native }
-        bannerImage
-        coverImage { extraLarge large }
-        description(asHtml: false)
-        siteUrl
-        genres
-        seasonYear
+    query ($search: String!) {
+      Page(page: 1, perPage: 5) {
+        media(search: $search, type: ANIME) {
+          id
+          title { english romaji native }
+          bannerImage
+          coverImage { extraLarge large }
+          description(asHtml: false)
+          siteUrl
+          genres
+          seasonYear
+        }
       }
     }
     """
     try:
-        from httpx import AsyncClient
+        from httpx import AsyncClient, TimeoutException
 
-        async with AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "https://graphql.anilist.co",
-                json={"query": query, "variables": {"search": title}},
-            )
-        if resp.status_code != 200:
-            LOGGER.warning(f"AniList title lookup failed with status {resp.status_code}")
-            return {}
-        media = resp.json().get("data", {}).get("Media") or {}
-        if media:
-            _metadata_cache[cache_key] = media
-        return media
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 StarFallX/1.2",
+        }
+        payload = {"query": query, "variables": {"search": title}}
+        for attempt in range(2):
+            try:
+                async with AsyncClient(timeout=12, headers=headers) as client:
+                    resp = await client.post(
+                        "https://graphql.anilist.co",
+                        json=payload,
+                    )
+                if resp.status_code != 200:
+                    LOGGER.warning(
+                        f"AniList title lookup failed with status {resp.status_code}"
+                    )
+                    if resp.status_code >= 500:
+                        await sleep(1)
+                        continue
+                    return {}
+                results = (
+                    resp.json()
+                    .get("data", {})
+                    .get("Page", {})
+                    .get("media")
+                    or []
+                )
+                media = next((item for item in results if item.get("bannerImage")), None)
+                media = media or (results[0] if results else {})
+                if media:
+                    _metadata_cache[cache_key] = media
+                return media
+            except TimeoutException:
+                LOGGER.warning(
+                    f"AniList title lookup timed out (attempt {attempt + 1}/2)"
+                )
+                await sleep(1)
+        return {}
     except Exception as e:
         LOGGER.warning(f"AniList title lookup failed for '{title}': {e}")
         return {}
@@ -1630,6 +1754,69 @@ async def get_anilist_poster_link(title, as_doc=False):
     if as_doc:
         return cover.get("extraLarge") or cover.get("large") or media.get("bannerImage")
     return media.get("bannerImage") or cover.get("extraLarge") or cover.get("large")
+
+
+async def _fetch_mal_media(title):
+    title = _clean_rename_token(title)
+    client_id = getattr(Config, "MYANIMELIST_CLIENT_ID", "")
+    if not title or not client_id:
+        return {}
+    cache_key = f"mal:{title.lower()}"
+    if cache_key in _metadata_cache:
+        return _metadata_cache[cache_key]
+    try:
+        from httpx import AsyncClient, TimeoutException
+
+        headers = {
+            "X-MAL-CLIENT-ID": client_id,
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 StarFallX/1.2",
+        }
+        params = {
+            "q": title,
+            "limit": 5,
+            "fields": "id,title,alternative_titles,main_picture,start_date,synopsis",
+        }
+        for attempt in range(2):
+            try:
+                async with AsyncClient(timeout=12, headers=headers) as client:
+                    resp = await client.get(
+                        "https://api.myanimelist.net/v2/anime",
+                        params=params,
+                    )
+                if resp.status_code != 200:
+                    LOGGER.warning(
+                        f"MyAnimeList lookup failed with status {resp.status_code}"
+                    )
+                    if resp.status_code >= 500:
+                        await sleep(1)
+                        continue
+                    return {}
+                items = resp.json().get("data") or []
+                media = (items[0] or {}).get("node") if items else {}
+                if media:
+                    _metadata_cache[cache_key] = media
+                return media or {}
+            except TimeoutException:
+                LOGGER.warning(
+                    f"MyAnimeList lookup timed out (attempt {attempt + 1}/2)"
+                )
+                await sleep(1)
+        return {}
+    except Exception as e:
+        LOGGER.warning(f"MyAnimeList lookup failed for '{title}': {e}")
+        return {}
+
+
+async def _resolve_mal_title(title):
+    media = await _fetch_mal_media(title)
+    return media.get("title") or ""
+
+
+async def get_mal_poster_link(title, as_doc=False):
+    media = await _fetch_mal_media(title)
+    picture = media.get("main_picture") or {}
+    return picture.get("large") or picture.get("medium")
 
 
 async def _fetch_jikan_media(title):
@@ -1732,24 +1919,18 @@ async def _resolve_media_title(title, filename, year=None):
         anilist_title = await _resolve_anilist_title(title)
         if anilist_title:
             return anilist_title
-        jikan_title = await _resolve_jikan_title(title)
-        if jikan_title:
-            return jikan_title
-        kitsu_title = await _resolve_kitsu_title(title)
-        if kitsu_title:
-            return kitsu_title
+        mal_title = await _resolve_mal_title(title)
+        if mal_title:
+            return mal_title
     tmdb_title = await _resolve_tmdb_title(title, year)
     if tmdb_title:
         return tmdb_title
     anilist_title = await _resolve_anilist_title(title)
     if anilist_title:
         return anilist_title
-    jikan_title = await _resolve_jikan_title(title)
-    if jikan_title:
-        return jikan_title
-    kitsu_title = await _resolve_kitsu_title(title)
-    if kitsu_title:
-        return kitsu_title
+    mal_title = await _resolve_mal_title(title)
+    if mal_title:
+        return mal_title
     return await _resolve_imdb_title(title, year)
 
 
@@ -1780,22 +1961,11 @@ async def extract_metadata_from_filename(filename, filepath=None):
         "dynamic_range": "",
         "release_group": "",
         "group": "",
+        "DS4K": "",
     }
 
-    uploader_tags = [
-        "Toonworld4all",
-        "SubsPlease",
-        "EMBER",
-        "Erai-raws",
-        "HorribleSubs",
-        "AnimeRG",
-        "Judas",
-        "ASW",
-        "Anime Time",
-    ]
-
     pattern = (
-        r"^\[(?:" + "|".join(re.escape(tag) for tag in uploader_tags) + r")\]\s*"
+        r"^\[(?:" + "|".join(re.escape(tag) for tag in UPLOADER_TAGS) + r")\]\s*"
     )
     clean_filename = re.sub(pattern, "", filename, flags=re.IGNORECASE).strip()
 
@@ -1966,6 +2136,8 @@ async def extract_metadata_from_filename(filename, filepath=None):
     source_quality = _extract_source_quality(filename)
     if source_quality:
         metadata["quality"] = source_quality
+    if _has_ds4k(filename):
+        metadata["DS4K"] = "DS4K"
 
     bit_match = re.search(r"\b(8|10|12)[-\s.]?bit\b|\bHi(8|10|12)P\b", filename, re.IGNORECASE)
     if bit_match:
@@ -1998,10 +2170,6 @@ async def extract_metadata_from_filename(filename, filepath=None):
         metadata["resolution"] = stream_info["resolution"]
     if stream_info.get("bit") and not metadata["bit"]:
         metadata["bit"] = stream_info["bit"]
-    if metadata.get("quality") == "DS4K":
-        metadata["resolution"] = ""
-        metadata["bit"] = ""
-
     if not metadata["title"] or metadata["title"].lower() == "unknown":
         metadata["title"] = _clean_title_from_filename(filename)
 
@@ -2110,7 +2278,7 @@ def _final_clean(title):
 
 
 def format_clean_poster_title(raw_title, rename_regex=None):
-    """Clean a raw filename into a search-friendly title for TMDb lookup.
+    """Clean a raw filename into a search-friendly metadata lookup title.
 
     Returns (title, season_string_or_None, year_string_or_None).
     """
@@ -2123,6 +2291,35 @@ def format_clean_poster_title(raw_title, rename_regex=None):
             raw_title = apply_regex_rename(raw_title, rename_regex)
         except Exception as e:
             LOGGER.warning(f"Failed to apply regex clean to TMDb title: {e}")
+
+    normalized = re.sub(r"https?://\S+", " ", raw_title)
+    normalized = re.sub(r"\bt(?:elegram)?\.me/\S+", " ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\bwww\S*", " ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\.\w{2,4}$", "", normalized)
+    normalized = normalized.replace("_", " ").replace(".", " ")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    season = None
+    year = None
+    season_match = re.search(
+        r"(?<![A-Za-z0-9])(?:Season\s*|S)0*(\d{1,2})(?:\s*E\d{1,4})?(?![A-Za-z0-9])",
+        normalized,
+        re.IGNORECASE,
+    )
+    if season_match:
+        season = f"Season {int(season_match.group(1))}"
+    year_match = re.search(r"\b(19\d{2}|20[0-3]\d)\b", normalized)
+    if year_match:
+        year = year_match.group(1)
+
+    title = _clean_title_from_filename(raw_title)
+    if title:
+        if year:
+            title = re.sub(rf"\b{re.escape(year)}\b", " ", title)
+        title = re.sub(TITLE_NOISE_PATTERN, " ", title, flags=re.IGNORECASE)
+        title = _final_clean(re.sub(r"\s+", " ", title).strip(" -._"))
+        if title:
+            return title, season, year
 
     # Remove URLs and telegram links
     title = re.sub(r"https?://\S+", " ", raw_title)
@@ -2198,18 +2395,7 @@ def format_clean_poster_title(raw_title, rename_regex=None):
 
 
 async def get_tmdb_poster_link(title, year=None, as_doc=False):
-    """Fetch a poster/backdrop URL from TMDb API with language priority.
-
-    Uses Config.TMDB_ACCESS_TOKEN for authentication.
-    Two-step process:
-    1. Search /search/multi to get TMDb ID + media_type
-    2. Fetch /{media_type}/{id}/images for language-specific images
-
-    Priority logic:
-    - Video (as_doc=False): English backdrop > clean backdrop > any poster
-    - Document (as_doc=True): English poster > any poster > any backdrop
-    Returns the image URL string or None.
-    """
+    """Fetch a poster/backdrop URL from TMDb with one live HTTP client."""
     access_token = Config.TMDB_ACCESS_TOKEN
     if not access_token:
         LOGGER.warning("TMDB_ACCESS_TOKEN not configured, skipping TMDb lookup")
@@ -2222,8 +2408,6 @@ async def get_tmdb_poster_link(title, year=None, as_doc=False):
             "Authorization": f"Bearer {access_token}",
             "accept": "application/json",
         }
-
-        # Step 1: Search for the title
         search_url = "https://api.themoviedb.org/3/search/multi"
         params = {
             "query": title,
@@ -2231,173 +2415,159 @@ async def get_tmdb_poster_link(title, year=None, as_doc=False):
             "language": "en-US",
             "page": "1",
         }
+        search_params_list = [params.copy()]
         if year:
             params["year"] = year
+            params["primary_release_year"] = year
+            params["first_air_date_year"] = year
+            search_params_list = [params.copy()]
+            no_year_params = params.copy()
+            for year_key in ("year", "primary_release_year", "first_air_date_year"):
+                no_year_params.pop(year_key, None)
+            search_params_list.append(no_year_params)
 
-        for attempt in range(3):
-            try:
-                async with AsyncClient(timeout=10) as client:
-                    resp = await client.get(
-                        search_url, params=params, headers=headers
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        results = data.get("results", [])
-                        if not results:
-                            LOGGER.info(f"No TMDb results for '{title}'")
-                            return None
-
-                        first_result = results[0]
-                        tmdb_id = first_result.get("id")
-                        media_type = first_result.get("media_type", "movie")
-                        result_name = (
-                            first_result.get("title")
-                            or first_result.get("name")
+        async with AsyncClient(timeout=10) as client:
+            for search_params in search_params_list:
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(
+                            search_url, params=search_params, headers=headers
                         )
+                        if resp.status_code == 200:
+                            results = resp.json().get("results", [])
+                            if not results:
+                                LOGGER.info(f"No TMDb results for '{title}'")
+                                break
 
-                        # Skip person results
-                        if media_type == "person":
-                            LOGGER.info(
-                                f"TMDb result is a person, skipping: {result_name}"
+                            first_result = results[0]
+                            tmdb_id = first_result.get("id")
+                            media_type = first_result.get("media_type", "movie")
+                            result_name = (
+                                first_result.get("title")
+                                or first_result.get("name")
                             )
-                            return None
 
-                        # Step 2: Get images with language filter
-                        images_url = (
-                            f"https://api.themoviedb.org/3"
-                            f"/{media_type}/{tmdb_id}/images"
-                        )
-                        images_params = {
-                            "include_image_languages": "en,null",
-                        }
-                        img_resp = await client.get(
-                            images_url,
-                            params=images_params,
-                            headers=headers,
-                        )
-
-                        if img_resp.status_code == 200:
-                            img_data = img_resp.json()
-                            backdrops = img_data.get("backdrops", [])
-                            posters = img_data.get("posters", [])
-
-                            # Separate English and clean (null) images
-                            en_backdrops = [
-                                b for b in backdrops
-                                if b.get("iso_639_1") == "en"
-                            ]
-                            clean_backdrops = [
-                                b for b in backdrops
-                                if b.get("iso_639_1") is None
-                            ]
-                            en_posters = [
-                                p for p in posters
-                                if p.get("iso_639_1") == "en"
-                            ]
-                            other_posters = [
-                                p for p in posters
-                                if p.get("iso_639_1") is None
-                            ]
-
-                            image_path = None
-                            image_type = "unknown"
-
-                            if as_doc:
-                                # Document: English poster > any poster > backdrop
-                                if en_posters:
-                                    image_path = en_posters[0]["file_path"]
-                                    image_type = "poster (en)"
-                                elif other_posters:
-                                    image_path = other_posters[0]["file_path"]
-                                    image_type = "poster (clean)"
-                                elif posters:
-                                    image_path = posters[0]["file_path"]
-                                    image_type = "poster (other)"
-                                elif en_backdrops:
-                                    image_path = en_backdrops[0]["file_path"]
-                                    image_type = "backdrop (en)"
-                                elif clean_backdrops:
-                                    image_path = clean_backdrops[0]["file_path"]
-                                    image_type = "backdrop (clean)"
-                            else:
-                                # Video: English backdrop > clean backdrop > poster
-                                if en_backdrops:
-                                    image_path = en_backdrops[0]["file_path"]
-                                    image_type = "landscape (en)"
-                                elif clean_backdrops:
-                                    image_path = clean_backdrops[0]["file_path"]
-                                    image_type = "landscape (clean)"
-                                elif backdrops:
-                                    image_path = backdrops[0]["file_path"]
-                                    image_type = "landscape (other)"
-                                elif en_posters:
-                                    image_path = en_posters[0]["file_path"]
-                                    image_type = "poster (en)"
-                                elif posters:
-                                    image_path = posters[0]["file_path"]
-                                    image_type = "poster (fallback)"
-
-                            if image_path:
-                                poster_url = (
-                                    f"https://image.tmdb.org/t/p/original"
-                                    f"{image_path}"
-                                )
+                            if media_type == "person":
                                 LOGGER.info(
-                                    f"Found TMDb {image_type}: {result_name}"
+                                    f"TMDb result is a person, skipping: {result_name}"
                                 )
-                                return poster_url
+                                return None
 
-                        # Fallback: use search result's default image
-                        LOGGER.info(
-                            "Images endpoint failed, using search fallback"
-                        )
-                        backdrop_path = first_result.get("backdrop_path")
-                        poster_path = first_result.get("poster_path")
-                        fallback = (
-                            (poster_path or backdrop_path) if as_doc
-                            else (backdrop_path or poster_path)
-                        )
-                        if fallback:
+                            images_url = (
+                                f"https://api.themoviedb.org/3"
+                                f"/{media_type}/{tmdb_id}/images"
+                            )
+                            img_resp = await client.get(
+                                images_url,
+                                params={"include_image_languages": "en,null"},
+                                headers=headers,
+                            )
+
+                            if img_resp.status_code == 200:
+                                img_data = img_resp.json()
+                                backdrops = img_data.get("backdrops", [])
+                                posters = img_data.get("posters", [])
+                                en_backdrops = [
+                                    b for b in backdrops
+                                    if b.get("iso_639_1") == "en"
+                                ]
+                                clean_backdrops = [
+                                    b for b in backdrops
+                                    if b.get("iso_639_1") is None
+                                ]
+                                en_posters = [
+                                    p for p in posters
+                                    if p.get("iso_639_1") == "en"
+                                ]
+                                clean_posters = [
+                                    p for p in posters
+                                    if p.get("iso_639_1") is None
+                                ]
+
+                                image_path = None
+                                image_type = "unknown"
+                                if as_doc:
+                                    choices = (
+                                        (en_posters, "poster (en)"),
+                                        (clean_posters, "poster (clean)"),
+                                        (posters, "poster (other)"),
+                                        (en_backdrops, "backdrop (en)"),
+                                        (clean_backdrops, "backdrop (clean)"),
+                                        (backdrops, "backdrop (other)"),
+                                    )
+                                else:
+                                    choices = (
+                                        (en_backdrops, "landscape (en)"),
+                                        (clean_backdrops, "landscape (clean)"),
+                                        (backdrops, "landscape (other)"),
+                                        (en_posters, "poster (en)"),
+                                        (clean_posters, "poster (clean)"),
+                                        (posters, "poster (fallback)"),
+                                    )
+                                for images, img_type in choices:
+                                    if images:
+                                        image_path = images[0].get("file_path")
+                                        image_type = img_type
+                                        break
+
+                                if image_path:
+                                    LOGGER.info(
+                                        f"Found TMDb {image_type}: {result_name}"
+                                    )
+                                    return (
+                                        f"https://image.tmdb.org/t/p/original"
+                                        f"{image_path}"
+                                    )
+
                             LOGGER.info(
-                                f"Found TMDb fallback image: {result_name}"
+                                "Images endpoint failed, using search fallback"
                             )
-                            return (
-                                f"https://image.tmdb.org/t/p/original"
-                                f"{fallback}"
+                            backdrop_path = first_result.get("backdrop_path")
+                            poster_path = first_result.get("poster_path")
+                            fallback = (
+                                (poster_path or backdrop_path) if as_doc
+                                else (backdrop_path or poster_path)
                             )
+                            if fallback:
+                                LOGGER.info(
+                                    f"Found TMDb fallback image: {result_name}"
+                                )
+                                return (
+                                    f"https://image.tmdb.org/t/p/original"
+                                    f"{fallback}"
+                                )
 
-                        LOGGER.info(
-                            f"No images available for '{title}' on TMDb"
-                        )
-                        return None
+                            LOGGER.info(
+                                f"No images available for '{title}' on TMDb"
+                            )
+                            return None
 
-                    elif resp.status_code == 401:
-                        LOGGER.warning(
-                            "TMDb authentication failed. Check your token"
-                        )
-                        return None
-                    elif resp.status_code >= 500:
-                        LOGGER.warning(
-                            f"TMDb server error {resp.status_code} "
-                            f"(attempt {attempt + 1}/3)"
-                        )
-                        await sleep(2)
-                    else:
+                        if resp.status_code == 401:
+                            LOGGER.warning(
+                                "TMDb authentication failed. Check your token"
+                            )
+                            return None
+                        if resp.status_code >= 500:
+                            LOGGER.warning(
+                                f"TMDb server error {resp.status_code} "
+                                f"(attempt {attempt + 1}/3)"
+                            )
+                            await sleep(2)
+                            continue
                         LOGGER.warning(
                             f"TMDb API returned status {resp.status_code} "
                             f"for '{title}'"
                         )
                         return None
-
-            except TimeoutException:
-                LOGGER.warning(
-                    f"Timeout on attempt {attempt + 1}/3 for TMDb API"
-                )
-            except Exception as e:
-                LOGGER.warning(
-                    f"Client error on attempt {attempt + 1}/3: {e}"
-                )
-            await sleep(1)
+                    except TimeoutException:
+                        LOGGER.warning(
+                            f"Timeout on attempt {attempt + 1}/3 for TMDb API"
+                        )
+                    except Exception as e:
+                        LOGGER.warning(
+                            f"Client error on attempt {attempt + 1}/3: {e}"
+                        )
+                    await sleep(1)
 
     except Exception as e:
         LOGGER.error(f"TMDb API error for '{title}': {e}")
@@ -2427,23 +2597,6 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
         LOGGER.info(f"Poster found via cached {provider}")
         return cached_url
 
-    if _looks_like_anime_name(raw_filename, title):
-        anilist_url = await get_anilist_poster_link(title, as_doc)
-        if anilist_url:
-            LOGGER.info("Poster found via AniList API")
-            _metadata_cache[cache_key] = (anilist_url, "AniList")
-            return anilist_url
-        jikan_url = await get_jikan_poster_link(title, as_doc)
-        if jikan_url:
-            LOGGER.info("Poster found via Jikan API")
-            _metadata_cache[cache_key] = (jikan_url, "Jikan")
-            return jikan_url
-        kitsu_url = await get_kitsu_poster_link(title, as_doc)
-        if kitsu_url:
-            LOGGER.info("Poster found via Kitsu API")
-            _metadata_cache[cache_key] = (kitsu_url, "Kitsu")
-            return kitsu_url
-
     poster_url = await get_tmdb_poster_link(title, year, as_doc)
     if poster_url:
         LOGGER.info("Poster found via TMDb API")
@@ -2455,16 +2608,11 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
         LOGGER.info("Poster found via AniList API")
         _metadata_cache[cache_key] = (anilist_url, "AniList")
         return anilist_url
-    jikan_url = await get_jikan_poster_link(title, as_doc)
-    if jikan_url:
-        LOGGER.info("Poster found via Jikan API")
-        _metadata_cache[cache_key] = (jikan_url, "Jikan")
-        return jikan_url
-    kitsu_url = await get_kitsu_poster_link(title, as_doc)
-    if kitsu_url:
-        LOGGER.info("Poster found via Kitsu API")
-        _metadata_cache[cache_key] = (kitsu_url, "Kitsu")
-        return kitsu_url
+    mal_url = await get_mal_poster_link(title, as_doc)
+    if mal_url:
+        LOGGER.info("Poster found via MyAnimeList API")
+        _metadata_cache[cache_key] = (mal_url, "MyAnimeList")
+        return mal_url
 
     LOGGER.info("No poster found from metadata providers")
     return None

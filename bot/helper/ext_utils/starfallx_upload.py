@@ -202,6 +202,8 @@ class UploadRoute:
     thread_id: int | None = None
     token_key: str | None = None
     reserved: bool = False
+    direct_final: bool = False
+    notice: str = ""
 
     @property
     def direct(self):
@@ -379,34 +381,62 @@ class StarFallXUploadManager:
         self._meta[key] = {"bot_id": bot_id, "username": username, "status": "Ready"}
         return client
 
-    async def test_token(self, token, user_id=None, global_token=False):
+    def _final_destination(self, listener):
+        dest = getattr(listener, "leech_dest", None) or getattr(listener, "up_dest", None)
+        thread_id = getattr(listener, "chat_thread_id", None)
+        if not dest or dest == Config.LEECH_DUMP_CHAT:
+            dest = getattr(getattr(listener, "message", None), "chat", None)
+            dest = getattr(dest, "id", None) or getattr(listener, "user_id", None)
+            thread_id = getattr(getattr(listener, "message", None), "message_thread_id", None)
+        if not isinstance(dest, int):
+            if "|" in str(dest):
+                dest, thread = str(dest).split("|", 1)
+                thread_id = int(thread) if thread.lstrip("-").isdigit() else None
+            if str(dest).lstrip("-").isdigit():
+                dest = int(dest)
+            elif str(dest).lower() == "pm":
+                dest = getattr(listener, "user_id", None)
+        return dest, thread_id
+
+    async def test_token(self, token, user_id=None, global_token=False, allow_direct=False):
         owner = "global" if global_token else user_id
         key = self._token_key("global" if global_token else "user", owner, token)
         client = await self._start_client(token, key, "StarFallX test bot")
         chat_id, thread_id = parse_dump_chat()
         if chat_id is None:
-            raise ValueError("LEECH_DUMP_CHAT is not configured.")
-        msg = await client.send_message(
-            chat_id=chat_id,
-            text="StarFallX permission test.",
-            message_thread_id=thread_id,
-            disable_notification=True,
-        )
-        with contextlib.suppress(Exception):
-            await msg.delete()
+            if not allow_direct:
+                raise ValueError("LEECH_DUMP_CHAT is not configured.")
+            status = "Direct Only"
+        else:
+            try:
+                msg = await client.send_message(
+                    chat_id=chat_id,
+                    text="StarFallX permission test.",
+                    message_thread_id=thread_id,
+                    disable_notification=True,
+                )
+                with contextlib.suppress(Exception):
+                    await msg.delete()
+                status = "Ready"
+            except Exception as e:
+                if not allow_direct:
+                    raise
+                status = "Direct Only" if _error_status(e) == "Not In Dump" else "Failed"
+                if status == "Failed":
+                    raise
         meta = self._meta.get(key, {})
         return {
             "key": key,
             "bot_id": meta.get("bot_id"),
             "username": meta.get("username"),
-            "status": "Ready",
+            "status": status,
         }
 
     async def set_user_token(self, user_id, token, primary=False):
         token = str(token or "").strip()
         if not token or ":" not in token:
             raise ValueError("Invalid bot token format.")
-        info = await self.test_token(token, user_id=user_id)
+        info = await self.test_token(token, user_id=user_id, allow_direct=True)
         records = self.get_user_token_records(user_id)
         thash = token_hash(token)
         existing = next((record for record in records if record.get("token_hash") == thash), None)
@@ -417,7 +447,7 @@ class StarFallXUploadManager:
                         "token": token,
                         "bot_id": info.get("bot_id"),
                         "username": info.get("username"),
-                        "status": "Ready",
+                        "status": info.get("status", "Ready"),
                         "primary": existing.get("primary"),
                         "updated_at": int(time()),
                     }
@@ -434,7 +464,7 @@ class StarFallXUploadManager:
                         "token": token,
                         "bot_id": info.get("bot_id"),
                         "username": info.get("username"),
-                        "status": "Ready",
+                        "status": info.get("status", "Ready"),
                         "primary": primary or not records,
                         "updated_at": int(time()),
                     }
@@ -512,17 +542,17 @@ class StarFallXUploadManager:
         results = []
         for record in records:
             try:
-                info = await self.test_token(record.get("token"), user_id=user_id)
+                info = await self.test_token(record.get("token"), user_id=user_id, allow_direct=True)
                 record.update(
                     {
                         "bot_id": info.get("bot_id"),
                         "username": info.get("username"),
-                        "status": "Ready",
+                        "status": info.get("status", "Ready"),
                         "last_error": "",
                         "updated_at": int(time()),
                     }
                 )
-                results.append((record, True, "Ready"))
+                results.append((record, True, info.get("status", "Ready")))
             except Exception as e:
                 status = _error_status(e)
                 record.update(
@@ -668,7 +698,7 @@ class StarFallXUploadManager:
             listener.upload_client = self._last_queue_reason or "Queue"
             await sleep(2)
 
-    async def _route_from_record(self, record, scope, owner, label_prefix, chat_id, thread_id):
+    async def _route_from_record(self, record, scope, owner, label_prefix, chat_id, thread_id, listener=None):
         token = record.get("token")
         if not token or is_blacklisted(
             token=token,
@@ -691,11 +721,23 @@ class StarFallXUploadManager:
             return None
         meta = self._meta.get(key, {})
         username = meta.get("username") or record.get("username") or "HelperBot"
+        status = record.get("status") or "Ready"
+        direct_final = status == "Direct Only" or chat_id is None
+        route_chat_id, route_thread_id = chat_id, thread_id
+        notice = ""
+        if direct_final and listener is not None:
+            route_chat_id, route_thread_id = self._final_destination(listener)
+            status = "Direct Only"
+            notice = (
+                f"StarFallX: @{username} is not in LEECH_DUMP_CHAT, so this upload "
+                "will go directly to the final destination. Add the helper bot to "
+                "the main dump to enable sequential dump/copy support."
+            )
         record.update(
             {
                 "bot_id": meta.get("bot_id") or record.get("bot_id"),
                 "username": username,
-                "status": "Ready",
+                "status": status,
                 "last_error": "",
                 "updated_at": int(time()),
             }
@@ -706,15 +748,17 @@ class StarFallXUploadManager:
             kind,
             f"{label_prefix} @{username}",
             client,
-            chat_id,
-            thread_id,
+            route_chat_id,
+            route_thread_id,
             key,
             True,
+            direct_final,
+            notice,
         )
 
-    async def _try_user_records(self, records, scope, owner, label_prefix, chat_id, thread_id):
+    async def _try_user_records(self, records, scope, owner, label_prefix, chat_id, thread_id, listener=None):
         for record in self._ordered_records(records):
-            route = await self._route_from_record(record, scope, owner, label_prefix, chat_id, thread_id)
+            route = await self._route_from_record(record, scope, owner, label_prefix, chat_id, thread_id, listener)
             if route:
                 return route
         return None
@@ -752,7 +796,7 @@ class StarFallXUploadManager:
         is_owner_task = is_sudo_user(user_id)
         user_records = self.get_user_token_records(user_id, listener.user_dict)
 
-        if Config.USER_BOT_TOKEN_UPLOAD and chat_id is not None:
+        if Config.USER_BOT_TOKEN_UPLOAD:
             route = await self._try_user_records(
                 user_records,
                 "user",
@@ -760,6 +804,7 @@ class StarFallXUploadManager:
                 "Helper Bot",
                 chat_id,
                 thread_id,
+                listener,
             )
             if route:
                 return route
@@ -767,7 +812,6 @@ class StarFallXUploadManager:
         if (
             is_owner_task
             and _safe_bool(getattr(Config, "HELPER_TOKEN_OWNER_CAN_USE_APPROVED", True), True)
-            and chat_id is not None
         ):
             for owner_id, owner_dict in list(user_data.items()):
                 if owner_id == user_id:
@@ -780,6 +824,7 @@ class StarFallXUploadManager:
                     "Approved Helper",
                     chat_id,
                     thread_id,
+                    listener,
                 )
                 if route:
                     return route
@@ -862,7 +907,7 @@ class StarFallXUploadManager:
                 f"{index}. @{username} - <code>{record.get('token')}</code> | {primary} | {record.get('status')}"
             )
         lines.append("")
-        lines.append("Add every helper bot to LEECH_DUMP_CHAT, then use Test Tokens.")
+        lines.append("Add helper bots to LEECH_DUMP_CHAT for sequential support. Tokens not in dump show Direct Only.")
         return "\n".join(lines)
 
 

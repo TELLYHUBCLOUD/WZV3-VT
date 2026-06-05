@@ -1,9 +1,10 @@
-FROM mysterysd/wzmlx:v3
+ARG TARGETPLATFORM
+FROM --platform=$TARGETPLATFORM mysterysd/wzmlx:v3
 
 WORKDIR /usr/src/app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends mktorrent \
+    && apt-get install -y --no-install-recommends mediainfo mktorrent \
     && rm -rf /var/lib/apt/lists/*
 
 RUN chmod 777 /usr/src/app

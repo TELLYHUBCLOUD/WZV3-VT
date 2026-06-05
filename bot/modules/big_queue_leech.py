@@ -17,7 +17,13 @@ from ..helper.ext_utils.links_utils import is_magnet, is_url
 from ..helper.ext_utils.status_utils import get_readable_file_size
 from ..helper.telegram_helper.bot_commands import BotCommands
 from ..helper.telegram_helper.message_utils import edit_message, send_message
-from .batch_task_registry import BatchTaskController, get_batch_limits
+from .batch_task_registry import (
+    BatchTaskController,
+    finish_batch_plan,
+    get_batch_limits,
+    save_batch_plan,
+    update_batch_plan,
+)
 
 
 def _batch_limit():
@@ -168,6 +174,15 @@ async def bq_leech(client, message):
         tor, files, plan_dir = await _add_metadata_torrent(source, tag)
         batches, skipped, limit = _plan_batches(files)
         controller = BatchTaskController("bqleech", message)
+        await save_batch_plan(
+            controller,
+            {
+                "source": str(source),
+                "total_batches": len(batches),
+                "batch_limit": limit,
+                "torrent": tor.name,
+            },
+        )
         await edit_message(
             status,
             _planner_text(tor.name, batches, skipped, limit)
@@ -202,6 +217,7 @@ async def bq_leech(client, message):
                 batch_no = next_batch + 1
                 items, size = batches[next_batch]
                 next_batch += 1
+                await update_batch_plan(controller.gid, current_index=next_batch)
                 started = True
                 active_downloads += 1
                 active_uploads += 1
@@ -258,6 +274,7 @@ async def bq_leech(client, message):
 
         if controller.cancelled:
             await controller.cancel(controller.cancel_reason or "cancelled")
+            await finish_batch_plan(controller.gid, cancelled=True)
             await send_message(
                 message,
                 f"Big Queue Leech stopped: <code>{escape(controller.cancel_reason or 'cancelled')}</code>",
@@ -265,6 +282,7 @@ async def bq_leech(client, message):
             controller.close()
             return
         await send_message(message, "Big Queue Leech: all planned batches finished.")
+        await finish_batch_plan(controller.gid)
         controller.close()
     except Exception as e:
         LOGGER.error(f"BQLeech failed: {e}", exc_info=True)
@@ -273,6 +291,8 @@ async def bq_leech(client, message):
             await _cleanup_metadata_torrent(tor, tag, plan_dir)
     finally:
         if "controller" in locals():
+            if controller.cancelled:
+                await finish_batch_plan(controller.gid, cancelled=True)
             controller.close()
         if remove_source and source and await aiopath.exists(source):
             await remove(source)

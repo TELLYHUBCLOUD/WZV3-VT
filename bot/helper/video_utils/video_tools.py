@@ -424,6 +424,7 @@ async def _create_intro_subtitle(listener, dir_path):
     palette = str(getattr(Config, "INTRO_SUBTITLE_COLOR_PALETTE", "") or "")
     safe_text = text.replace("\n", r"\N").replace("{", "(").replace("}", ")")
     safe_text = _colorize_ass_letters(safe_text, palette)
+    safe_text = r"{\b1}" + safe_text
     if not ranges:
         ranges = [(0, duration)]
     dialogues = []
@@ -1042,11 +1043,11 @@ async def _execute_vt_pipeline(listener, input_path, state):
     if has_extractions:
         extracted_paths, extract_dir = await _extract_streams(listener, input_path, state)
         if extract_only:
+            listener._vt_extract_only = True
             if extracted_paths:
                 with suppress(Exception):
                     await remove(input_path)
-                return extract_dir
-            return input_path
+            return extract_dir
 
     dir_path = ospath.dirname(input_path)
     extra_inputs = []
@@ -1066,9 +1067,11 @@ async def _execute_vt_pipeline(listener, input_path, state):
 
     if has_translate:
         target = _target_lang(listener)
+        all_sub = {t["index"]: t for t in state.get("sub_tracks", [])}
         for idx in state.get("translate_sub", []):
             sub_path = ospath.join(dir_path, f"subtitle_{listener.mid}_{idx}.srt")
-            if await _extract_single(input_path, f"0:s:{idx}", sub_path, codec="srt"):
+            track = all_sub.get(idx)
+            if track and await _extract_sub_as_srt(input_path, track, sub_path):
                 try:
                     translated = await _translate_srt_file(
                         sub_path, target, listener.mid
@@ -1284,29 +1287,73 @@ async def _extract_streams(listener, input_path, state):
     extract_dir = ospath.join(dir_path, f"vt_extract_{listener.mid}_{stem[:40]}")
     await makedirs(extract_dir, exist_ok=True)
     extracted = []
+    failed = False
 
     for idx in state.get("extract_audio", []):
         track = all_audio.get(idx)
         if not track:
             continue
-        out_name = f"Audio_{track['lang']}_{idx + 1}.aac"
+        ext = _extract_extension(track, "audio")
+        out_name = f"Audio_{track['lang']}_{idx + 1}{ext}"
         out_path = ospath.join(extract_dir, out_name)
-        if await _extract_single(input_path, f"0:a:{idx}", out_path):
+        if await _extract_single(input_path, track, out_path):
             extracted.append(out_path)
+        else:
+            failed = True
 
     for idx in state.get("extract_sub", []):
         track = all_sub.get(idx)
         if not track:
             continue
-        out_name = f"Subtitle_{track['lang']}_{idx + 1}.srt"
+        ext = _extract_extension(track, "subtitle")
+        out_name = f"Subtitle_{track['lang']}_{idx + 1}{ext}"
         out_path = ospath.join(extract_dir, out_name)
-        if await _extract_single(input_path, f"0:s:{idx}", out_path, codec="srt"):
+        if await _extract_single(input_path, track, out_path):
             extracted.append(out_path)
+        else:
+            failed = True
+    if failed:
+        await send_message(
+            listener.message,
+            "Extract failed: selected stream could not be copied. Codec/container mismatch or unsupported stream.",
+        )
     return extracted, extract_dir
 
 
-async def _extract_single(input_path, map_spec, out_path, codec="copy"):
+def _extract_extension(track, kind):
+    codec = str(track.get("codec") or track.get("codec_name") or "").lower()
+    if kind == "audio":
+        return {
+            "aac": ".aac",
+            "eac3": ".eac3",
+            "ac3": ".ac3",
+            "dts": ".dts",
+            "truehd": ".thd",
+            "flac": ".flac",
+            "opus": ".opus",
+            "mp3": ".mp3",
+            "vorbis": ".ogg",
+        }.get(codec, f".{codec or 'audio'}")
+    return {
+        "subrip": ".srt",
+        "ass": ".ass",
+        "ssa": ".ass",
+        "webvtt": ".vtt",
+    }.get(codec, f".{codec or 'sub'}")
+
+
+async def _extract_single(input_path, track, out_path):
     """Extract a single stream using FFmpeg."""
+    stream_index = track.get("stream_index", track.get("index"))
+    codec = str(track.get("codec") or track.get("codec_name") or "unknown")
+    map_spec = f"0:{stream_index}"
+    LOGGER.info(
+        "VT extract stream: index=%s codec=%s ext=%s output=%s",
+        stream_index,
+        codec,
+        ospath.splitext(out_path)[1],
+        out_path,
+    )
     cmd = [
         "taskset",
         "-c",
@@ -1314,17 +1361,69 @@ async def _extract_single(input_path, map_spec, out_path, codec="copy"):
         BinConfig.FFMPEG_NAME,
         "-y", "-i", input_path,
         "-map", map_spec,
-        "-c", codec,
+        "-c", "copy",
         "-threads", str(get_ffmpeg_threads()),
         out_path,
     ]
     async with ffmpeg_task(label="Extract stream"):
         process = await create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)
-        await process.communicate()
-    if not await aiopath.exists(out_path):
-        LOGGER.warning(f"Stream extraction failed for {map_spec}")
+        _, stderr = await process.communicate()
+    LOGGER.info("VT extract stream return code: %s", process.returncode)
+    valid_output = False
+    if process.returncode == 0 and await aiopath.exists(out_path):
+        try:
+            valid_output = await aiopath.getsize(out_path) > 0
+        except Exception:
+            valid_output = False
+    if not valid_output:
+        with suppress(Exception):
+            if await aiopath.exists(out_path):
+                await remove(out_path)
+        LOGGER.warning(
+            "Stream extraction failed for %s codec=%s rc=%s stderr=%s",
+            map_spec,
+            codec,
+            process.returncode,
+            stderr.decode(errors="ignore")[-500:] if stderr else "",
+        )
         return False
     return True
+
+
+async def _extract_sub_as_srt(input_path, track, out_path):
+    stream_index = track.get("stream_index", track.get("index"))
+    map_spec = f"0:{stream_index}"
+    cmd = [
+        "taskset",
+        "-c",
+        get_ffmpeg_cores(),
+        BinConfig.FFMPEG_NAME,
+        "-y", "-i", input_path,
+        "-map", map_spec,
+        "-c:s", "srt",
+        "-threads", str(get_ffmpeg_threads()),
+        out_path,
+    ]
+    async with ffmpeg_task(label="Extract subtitle for translate"):
+        process = await create_subprocess_exec(*cmd, stdout=PIPE, stderr=PIPE)
+        _, stderr = await process.communicate()
+    if process.returncode == 0 and await aiopath.exists(out_path):
+        try:
+            if await aiopath.getsize(out_path) > 0:
+                return True
+        except Exception:
+            pass
+    with suppress(Exception):
+        if await aiopath.exists(out_path):
+            await remove(out_path)
+    LOGGER.warning(
+        "Subtitle SRT extraction failed for %s codec=%s rc=%s stderr=%s",
+        map_spec,
+        track.get("codec"),
+        process.returncode,
+        stderr.decode(errors="ignore")[-500:] if stderr else "",
+    )
+    return False
 
 
 async def pre_probe_and_show_ui(listener, file_, reply_to):

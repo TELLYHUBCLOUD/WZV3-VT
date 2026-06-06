@@ -56,6 +56,16 @@ def config_bool(value, default=False):
         return default
     return text in {"1", "true", "yes", "y", "on"}
 
+
+TEMPLATE_VARIABLES_TEXT = (
+    "{filename} {upload_filename} {file_name} {file_size} {file_caption} "
+    "{languages} {subtitles} {duration} {ott} {resolution} {name} {title} "
+    "{year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} "
+    "{shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} "
+    "{acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} "
+    "{dynamic_range} {release_group} {group}"
+)
+
 leech_options = [
     "THUMBNAIL",
     "LEECH_SPLIT_SIZE",
@@ -377,6 +387,23 @@ Here I will explain how to use mltb.* which is reference to files you want to wo
         "Send Regex Remname.\n<b>Format:</b> <code>|pattern:replacement|pattern2:replacement2</code>\n<b>Timeout:</b> 60 sec",
     ),
 }
+
+user_settings_text["LEECH_CAPTION"] = (
+    "",
+    "",
+    "Send Leech Caption. You can add HTML tags and placeholders: "
+    f"<code>{TEMPLATE_VARIABLES_TEXT}</code>.\n"
+    "<b>Time Left:</b> <code>60 sec</code>",
+)
+user_settings_text["lremname_auto"] = (
+    "AutoRename Template",
+    "AutoRename Template uses filename, caption, media metadata, TMDb, and AniList lookup.",
+    "Send AutoRename Template.\n"
+    f"<b>Variables:</b> <code>{TEMPLATE_VARIABLES_TEXT}</code>\n"
+    "<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n"
+    "<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {bit} {DS4K} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n"
+    "<b>Timeout:</b> 60 sec",
+)
 
 
 async def get_user_settings(from_user, stype="main"):
@@ -1891,19 +1918,24 @@ def _safe_import_user_settings(settings):
         "DATABASE_URL",
     }
     safe = {}
+    skipped = []
     for key, value in (settings or {}).items():
         key_u = str(key).upper()
         if key in deny_keys:
+            skipped.append(key)
             continue
         if any(secret in key_u for secret in ("PASSWORD", "COOKIE", "SECRET")):
+            skipped.append(key)
             continue
-        if "TOKEN" in key_u and not isinstance(value, bool):
+        if any(secret in key_u for secret in ("TOKEN", "SESSION")) and not isinstance(value, bool):
+            skipped.append(key)
             continue
         if key_u.endswith("_KEY") and not isinstance(value, bool):
+            skipped.append(key)
             continue
         if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
             safe[key] = value
-    return safe
+    return safe, skipped
 
 
 @new_task
@@ -1920,15 +1952,18 @@ async def import_user_settings_zip(_, message, rfunc):
         with ZipFile(file_path) as zf:
             with zf.open("user_settings.json") as fp:
                 payload = json.loads(fp.read().decode("utf-8"))
-        settings = _safe_import_user_settings(payload.get("settings", {}))
+        settings, skipped = _safe_import_user_settings(payload.get("settings", {}))
         if not settings:
-            await send_message(message, "No safe user settings found to import.")
+            await send_message(
+                message,
+                f"No safe user settings found to import. Protected/skipped keys: {len(skipped)}.",
+            )
         else:
             user_data.setdefault(user_id, {}).update(settings)
             await database.update_user_data(user_id)
             await send_message(
                 message,
-                f"Imported {len(settings)} safe user settings. Helper tokens and secrets were skipped.",
+                f"Imported {len(settings)} safe user settings. Protected/skipped keys: {len(skipped)}.",
             )
     except Exception as e:
         await send_message(message, f"Settings import failed: <code>{escape(str(e))}</code>")
@@ -1982,7 +2017,7 @@ async def edit_user_settings(client, query):
         )
         rfunc = partial(update_user_settings, query, "main")
         pfunc = partial(import_user_settings_zip, rfunc=rfunc)
-        await event_handler(client, query, pfunc, rfunc)
+        await event_handler(client, query, pfunc, rfunc, document=True)
     elif data[2] == "font":
         await query.answer()
         current = user_dict.get("LEECH_FONT", Config.LEECH_FONT) or ""

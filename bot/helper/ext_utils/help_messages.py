@@ -300,7 +300,7 @@ Notes:
 7. Caption <code>{filename}</code> keeps the full final name with prefix/suffix; <code>{upload_filename}</code> is the shortened Telegram filename.
 
 AutoRename variables include:
-<code>{file_name}</code> <code>{file_size}</code> <code>{file_caption}</code> <code>{languages}</code> <code>{subtitles}</code> <code>{duration}</code> <code>{ott}</code> <code>{resolution}</code> <code>{name}</code> <code>{title}</code> <code>{year}</code> <code>{quality}</code> <code>{season}</code> <code>{episode}</code> <code>{audio}</code> <code>{lib}</code> <code>{extension}</code> <code>{shortsub}</code> <code>{shortlang}</code> <code>{part}</code> <code>{raw_name}</code> <code>{link}</code> <code>{vcodec}</code> <code>{codec}</code> <code>{acodec}</code> <code>{audio_codec}</code> <code>{audio_channels}</code> <code>{audio_bitrate}</code> <code>{hdr}</code> <code>{dynamic_range}</code> <code>{release_group}</code> <code>{group}</code>."""
+<code>{file_name}</code> <code>{file_size}</code> <code>{file_caption}</code> <code>{languages}</code> <code>{subtitles}</code> <code>{duration}</code> <code>{ott}</code> <code>{resolution}</code> <code>{name}</code> <code>{title}</code> <code>{year}</code> <code>{quality}</code> <code>{DS4K}</code> <code>{season}</code> <code>{episode}</code> <code>{audio}</code> <code>{lib}</code> <code>{extension}</code> <code>{shortsub}</code> <code>{shortlang}</code> <code>{part}</code> <code>{raw_name}</code> <code>{link}</code> <code>{vcodec}</code> <code>{codec}</code> <code>{acodec}</code> <code>{audio_codec}</code> <code>{audio_channels}</code> <code>{audio_bitrate}</code> <code>{hdr}</code> <code>{dynamic_range}</code> <code>{release_group}</code> <code>{group}</code>."""
 
 YT_HELP_DICT = {
     "main": yt,

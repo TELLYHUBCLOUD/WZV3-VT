@@ -13,6 +13,10 @@ def _selected_icon(selected):
     return "🟢 " if selected else ""
 
 
+def _selected_icon(selected):
+    return "\U0001F7E2 " if selected else ""
+
+
 def _has_extract_selection(state):
     return bool(state.get("extract_audio") or state.get("extract_sub"))
 
@@ -76,6 +80,10 @@ async def render_video_tools_main(vt_msg, state):
                 InlineKeyboardButton("Close", callback_data=f"vt_close_{task_id}"),
             ],
         ]
+        rows[0][0] = InlineKeyboardButton(
+            _selected_icon(True) + "Extract Stream",
+            callback_data=f"vt_extract_{task_id}",
+        )
     else:
         rows = [
             [

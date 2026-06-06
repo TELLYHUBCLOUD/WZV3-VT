@@ -183,19 +183,28 @@ def time_to_seconds(time_duration):
 
 
 def speed_string_to_bytes(size_text: str):
+    if isinstance(size_text, (int, float)):
+        return int(size_text)
+    if not size_text:
+        return 0
     size = 0
-    size_text = size_text.lower()
-    if "k" in size_text:
-        size += float(size_text.split("k")[0]) * 1024
-    elif "m" in size_text:
-        size += float(size_text.split("m")[0]) * 1048576
-    elif "g" in size_text:
-        size += float(size_text.split("g")[0]) * 1073741824
-    elif "t" in size_text:
-        size += float(size_text.split("t")[0]) * 1099511627776
-    elif "b" in size_text:
-        size += float(size_text.split("b")[0])
-    return size
+    size_text = str(size_text).strip().lower()
+    try:
+        if "k" in size_text:
+            size += float(size_text.split("k")[0]) * 1024
+        elif "m" in size_text:
+            size += float(size_text.split("m")[0]) * 1048576
+        elif "g" in size_text:
+            size += float(size_text.split("g")[0]) * 1073741824
+        elif "t" in size_text:
+            size += float(size_text.split("t")[0]) * 1099511627776
+        elif "b" in size_text:
+            size += float(size_text.split("b")[0])
+        elif size_text:
+            size += float(size_text)
+    except (TypeError, ValueError):
+        return 0
+    return int(size)
 
 
 def get_progress_bar_string(pct):

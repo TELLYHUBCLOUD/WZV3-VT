@@ -310,7 +310,7 @@ class TaskListener(TaskConfig):
         metadata_allowed = True
         if auto_enabled(self):
             metadata_allowed = bool_setting(self, "AUTO_METADATA")
-        if metadata_allowed and (
+        if metadata_allowed and not getattr(self, "_vt_extract_only", False) and (
             (hasattr(self, "metadata_dict") and self.metadata_dict)
             or (hasattr(self, "audio_metadata_dict") and self.audio_metadata_dict)
             or (hasattr(self, "video_metadata_dict") and self.video_metadata_dict)

@@ -116,6 +116,7 @@ AUTO_AUDIO_ORDER = ""  # Example: tam tel eng
 AUTO_SUBTITLE_ORDER = ""  # Example: eng tam
 
 # Batch Leech, normal link queue
+BATCH_TASK_RESTART_RESUME = True  # Resume /bleech and /bqleech plans after bot restart.
 BLEECH_MAX_ACTIVE_DOWNLOADS = 1
 BLEECH_MAX_ACTIVE_UPLOADS = 2
 BLEECH_LINK_SIZE_LIMIT_GB = 0  # 0 = no per-link size limit

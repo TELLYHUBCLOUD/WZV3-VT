@@ -8,6 +8,8 @@ from aiofiles.os import makedirs
 
 from .. import DOWNLOAD_DIR, task_dict, task_dict_lock
 from ..core.config_manager import Config
+from ..helper.telegram_helper.bot_commands import BotCommands
+from ..helper.telegram_helper.message_utils import send_message
 
 _batch_controllers = {}
 _batch_state_path = ospath.join(DOWNLOAD_DIR, "batch_task_plans.json")
@@ -142,3 +144,72 @@ async def cancel_batch_controller(gid, user_id, is_sudo=False):
     await controller.cancel("cancelled by user")
     await finish_batch_plan(gid, cancelled=True)
     return True
+
+
+async def resume_unfinished_batch_plans(client):
+    if not getattr(Config, "BATCH_TASK_RESTART_RESUME", True):
+        return
+
+    plans = await load_unfinished_batch_plans()
+    if not plans:
+        return
+
+    from .. import LOGGER
+
+    LOGGER.info(f"Batch restart recovery: found {len(plans)} saved plan(s)")
+    for gid, plan in plans.items():
+        kind = plan.get("kind")
+        chat_id = plan.get("chat_id")
+        message_id = plan.get("message_id")
+        try:
+            message = await client.get_messages(chat_id=chat_id, message_ids=message_id)
+            if not message:
+                await finish_batch_plan(gid, cancelled=True)
+                LOGGER.warning(f"Batch restart recovery: missing message for {gid}")
+                continue
+
+            if kind == "bleech":
+                links = list(plan.get("links") or [])
+                index = int(plan.get("current_index") or 0)
+                remaining = links[index:]
+                if not remaining:
+                    await finish_batch_plan(gid)
+                    continue
+                message.text = f"/{BotCommands.BatchLeechCommand[0]} {' '.join(remaining)}"
+                await send_message(
+                    message,
+                    (
+                        "<b>Batch Leech restart recovery</b>\n"
+                        f"Old controller: <code>{gid}</code>\n"
+                        f"Resuming from link <code>{index + 1}</code>."
+                    ),
+                )
+                await finish_batch_plan(gid)
+                from .batch_leech import batch_leech
+
+                await batch_leech(client, message)
+            elif kind == "bqleech":
+                source = plan.get("source")
+                if not source:
+                    await finish_batch_plan(gid, cancelled=True)
+                    continue
+                resume_index = int(plan.get("current_index") or 0)
+                message.text = f"/{BotCommands.BigQLeechCommand[0]} {source}"
+                message.bq_resume_index = resume_index
+                await send_message(
+                    message,
+                    (
+                        "<b>Big Queue Leech restart recovery</b>\n"
+                        f"Old controller: <code>{gid}</code>\n"
+                        f"Re-planning source from batch <code>{resume_index + 1}</code>."
+                    ),
+                )
+                await finish_batch_plan(gid)
+                from .big_queue_leech import bq_leech
+
+                await bq_leech(client, message)
+            else:
+                await finish_batch_plan(gid, cancelled=True)
+                LOGGER.warning(f"Batch restart recovery: unknown plan kind {kind}")
+        except Exception as e:
+            LOGGER.error(f"Batch restart recovery failed for {gid}: {e}", exc_info=True)

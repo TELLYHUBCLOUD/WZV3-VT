@@ -137,5 +137,9 @@ TgClient.bot.add_handler(
     )
 )
 
+from .modules.batch_task_registry import resume_unfinished_batch_plans
+
+bot_loop.create_task(resume_unfinished_batch_plans(TgClient.bot))
+
 LOGGER.info("WZ Client(s) & Services Started !")
 bot_loop.run_forever()

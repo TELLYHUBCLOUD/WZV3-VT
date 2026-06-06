@@ -288,7 +288,7 @@ auto_process = """<b>Auto Process</b>
 Configure in /usettings > Auto Process.
 
 Order:
-download -> unzip -> remove streams -> smart merge -> intro subtitle -> metadata -> auto rename -> sequential upload
+download -> unzip -> order tracks -> remove streams -> smart merge -> intro subtitle -> metadata -> auto rename -> sequential upload
 
 Notes:
 1. Smart merge batches episodes under Telegram max size minus AUTO_MERGE_SAFETY_MB.
@@ -301,6 +301,49 @@ Notes:
 
 AutoRename variables include:
 <code>{file_name}</code> <code>{file_size}</code> <code>{file_caption}</code> <code>{languages}</code> <code>{subtitles}</code> <code>{duration}</code> <code>{ott}</code> <code>{resolution}</code> <code>{name}</code> <code>{title}</code> <code>{year}</code> <code>{quality}</code> <code>{DS4K}</code> <code>{season}</code> <code>{episode}</code> <code>{audio}</code> <code>{lib}</code> <code>{extension}</code> <code>{shortsub}</code> <code>{shortlang}</code> <code>{part}</code> <code>{raw_name}</code> <code>{link}</code> <code>{vcodec}</code> <code>{codec}</code> <code>{acodec}</code> <code>{audio_codec}</code> <code>{audio_channels}</code> <code>{audio_bitrate}</code> <code>{hdr}</code> <code>{dynamic_range}</code> <code>{release_group}</code> <code>{group}</code>."""
+
+starfallx_video_tools = """<b>StarFallX Video Tools</b>: -vt
+
+Use <code>/cmd link -vt</code>. If streams are not ready, the bot waits for download/extract to finish and opens the menu later.
+
+Tools: Remove Stream, Extract Stream, Change Order, Audio Order, Subtitle Order, Merge Tracks, Translate Subs, Video + Video.
+
+Extract Stream is exclusive and uploads only extracted audio/subtitle artifacts."""
+
+starfallx_autorename = """<b>StarFallX AutoRename</b>
+
+Task override:
+<code>/cmd link -ar custom [S{season}E{episode}] {name} {resolution} {DS4K} {codec}</code>
+
+Reverse create can turn a sample filename into a template. Missing variables render blank.
+
+Useful variables:
+<code>{name}</code> <code>{title}</code> <code>{year}</code> <code>{season}</code> <code>{episode}</code> <code>{resolution}</code> <code>{quality}</code> <code>{DS4K}</code> <code>{codec}</code> <code>{audio_codec}</code> <code>{audio_channels}</code> <code>{shortsub}</code> <code>{release_group}</code>."""
+
+starfallx_batch = """<b>StarFallX Batch Leech</b>
+
+<code>/bleech link1 link2 link3</code> runs many links with BLEECH download/upload limits.
+
+<code>/bqleech magnet</code> is qB-only huge torrent batching using <code>BQLEECH_BATCH_SIZE_GB</code>.
+
+Restart recovery can resume these plans when <code>BATCH_TASK_RESTART_RESUME</code> is enabled."""
+
+starfallx_thumbnail = """<b>StarFallX Auto Thumbnail</b>
+
+Priority: custom user thumb -> TMDb -> AniList -> MyAnimeList -> FFmpeg frame.
+
+Provider images are saved from HD sources. Document thumbs are resized only when Telegram requires a small thumbnail."""
+
+starfallx_upload = """<b>StarFallX Upload Engine</b>
+
+Helper bot tokens improve parallel multi-file uploads, not one-file speed.
+
+Rules:
+1. One helper token = one active upload.
+2. Normal users use their own helper tokens.
+3. Owner/sudo can use approved helper pool.
+4. 2GB+ uploads need premium user session or split fallback.
+5. Add helper bots to LEECH_DUMP_CHAT for sequential dump/copy support."""
 
 YT_HELP_DICT = {
     "main": yt,
@@ -326,6 +369,11 @@ YT_HELP_DICT = {
     "FFmpeg-Cmds": ffmpeg_cmds,
     "Metadata": metadata,
     "Auto-Process": auto_process,
+    "StarFallX-VideoTools": starfallx_video_tools,
+    "StarFallX-AutoRename": starfallx_autorename,
+    "StarFallX-Batch": starfallx_batch,
+    "StarFallX-Thumbnail": starfallx_thumbnail,
+    "StarFallX-Upload": starfallx_upload,
 }
 
 MIRROR_HELP_DICT = {
@@ -358,6 +406,11 @@ MIRROR_HELP_DICT = {
     "FFmpeg-Cmds": ffmpeg_cmds,
     "Metadata": metadata,
     "Auto-Process": auto_process,
+    "StarFallX-VideoTools": starfallx_video_tools,
+    "StarFallX-AutoRename": starfallx_autorename,
+    "StarFallX-Batch": starfallx_batch,
+    "StarFallX-Thumbnail": starfallx_thumbnail,
+    "StarFallX-Upload": starfallx_upload,
 }
 
 CLONE_HELP_DICT = {
@@ -581,6 +634,22 @@ def get_help_string():
         elif key == "Rss":
             help_lines.append(f"/{BotCommands.RssCommand}: RSS Menu.")
 
+    help_lines.extend(
+        [
+            "",
+            "<b>StarFallX v1.2 quick guide</b>",
+            f"/{BotCommands.LeechCommand[0]} link -vt: open Video Tools after download. Extract Stream is exclusive.",
+            f"/{BotCommands.LeechCommand[0]} link -ar custom TEMPLATE: one-task AutoRename template.",
+            f"/{BotCommands.BatchLeechCommand[0]} link1 link2 link3: batch leech with download/upload limits.",
+            f"/{BotCommands.BigQLeechCommand[0]} magnet: qB huge torrent batching; /bql and /bqbleech also work.",
+            f"/{BotCommands.CreateTorrentCommand[0]} link: create thumbnail, contact sheet, BBCode description, and torrent.",
+            "Auto Process flow: download -> unzip -> order -> remove streams -> merge -> intro -> metadata -> rename -> sequential upload.",
+            "Auto Thumbnail flow: custom thumb -> TMDb -> AniList -> MyAnimeList -> FFmpeg frame.",
+            "Upload engine: StarFallX helper tokens improve parallel multi-file uploads; one token handles one active upload.",
+            "Restart recovery: /bleech and /bqleech plans can resume. Normal single /leech replay is notifier-only to avoid duplicate uploads.",
+            "Use /usetting for Leech, Auto Process, Helper Token, caption, thumbnail, zip export/import, and user upload options.",
+        ]
+    )
     return "\n".join(help_lines)
 
 

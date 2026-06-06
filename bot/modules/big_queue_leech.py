@@ -200,7 +200,22 @@ async def bq_leech(client, message):
         all_ids = [str(item.index) for item in files]
         dl_limit, up_limit = get_batch_limits("bqleech")
         active = []
-        next_batch = 0
+        next_batch = int(getattr(message, "bq_resume_index", 0) or 0)
+        if next_batch:
+            next_batch = min(max(next_batch, 0), len(batches))
+            if next_batch >= len(batches):
+                await send_message(message, "Big Queue Leech resume: all batches were already marked complete.")
+                await finish_batch_plan(controller.gid)
+                controller.close()
+                return
+            await update_batch_plan(controller.gid, current_index=next_batch)
+            await send_message(
+                message,
+                (
+                    "<b>Big Queue Leech resume</b>\n"
+                    f"Starting from batch <code>{next_batch + 1}</code> of <code>{len(batches)}</code>."
+                ),
+            )
 
         while (next_batch < len(batches) or active) and not controller.cancelled:
             active = [item for item in active if not item["done"].is_set()]

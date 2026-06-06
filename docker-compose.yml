@@ -6,3 +6,4 @@ services:
     network_mode: "host"
     volumes:
       - ./torrents:/usr/src/app/torrents
+      - ./config.py:/usr/src/app/config.py:ro

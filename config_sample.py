@@ -152,7 +152,7 @@ USENET_SERVERS = [
 # Update
 UPSTREAM_REPO = ""
 UPSTREAM_BRANCH = "master"
-UPDATE_PKGS = True
+UPDATE_PKGS = False 
 
 # Leech
 LEECH_SPLIT_SIZE = 0

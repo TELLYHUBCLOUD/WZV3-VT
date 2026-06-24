@@ -9,6 +9,7 @@ from asyncio import new_event_loop, set_event_loop
 bot_loop = new_event_loop()
 set_event_loop(bot_loop)
 
+from shutil import which
 from subprocess import run as srun
 from os import getcwd
 from asyncio import Lock
@@ -55,6 +56,36 @@ LOGGER = getLogger(__name__)
 cpu_no = cpu_count()
 threads = max(1, cpu_no // 2)
 cores = ",".join(str(i) for i in range(threads))
+
+
+def start_qbittorrent():
+    qbit_name = BinConfig.QBIT_NAME
+    qbit_path = which(qbit_name)
+
+    if not qbit_path and qbit_name != "qbittorrent-nox":
+        LOGGER.warning(
+            f"qBittorrent binary '{qbit_name}' was not found. "
+            "Trying fallback 'qbittorrent-nox'."
+        )
+        qbit_name = "qbittorrent-nox"
+        qbit_path = which(qbit_name)
+
+    if not qbit_path:
+        LOGGER.error(
+            f"qBittorrent binary '{BinConfig.QBIT_NAME}' was not found and "
+            "fallback 'qbittorrent-nox' is unavailable. qB leeching requires "
+            "qBittorrent; install qbittorrent-nox or fix BinConfig.QBIT_NAME."
+        )
+        raise SystemExit(1)
+
+    LOGGER.info(f"Starting qBittorrent with binary: {qbit_name} ({qbit_path})")
+    result = srun([qbit_path, "-d", f"--profile={getcwd()}"], check=False)
+    if result.returncode:
+        LOGGER.error(
+            f"qBittorrent failed to start with exit code {result.returncode}. "
+            "qB leeching requires qBittorrent."
+        )
+        raise SystemExit(result.returncode)
 
 bot_cache = {}
 DOWNLOAD_DIR = "/usr/src/app/downloads/"
@@ -202,6 +233,6 @@ sabnzbd_client = SabnzbdClient(
     api_key="admin",
     port="8070",
 )
-srun([BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}"], check=False)
+start_qbittorrent()
 
 scheduler = AsyncIOScheduler(event_loop=bot_loop)

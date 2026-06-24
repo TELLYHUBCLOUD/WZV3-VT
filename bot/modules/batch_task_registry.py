@@ -27,7 +27,7 @@ def get_batch_limits(kind):
     if kind == "bqleech":
         return (
             _safe_int(getattr(Config, "BQLEECH_MAX_ACTIVE_DOWNLOADS", 1), 1),
-            _safe_int(getattr(Config, "BQLEECH_MAX_ACTIVE_UPLOADS", 1), 1),
+            _safe_int(getattr(Config, "BQLEECH_MAX_ACTIVE_UPLOADS", 3), 3),
         )
     return (
         _safe_int(getattr(Config, "BLEECH_MAX_ACTIVE_DOWNLOADS", 1), 1),

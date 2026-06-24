@@ -265,6 +265,7 @@ async def bq_leech(client, message):
                 worker.bq_selected_files = selected
                 worker.bq_unselected_files = unselected
                 worker.bq_batch_label = f"{batch_no}/{len(batches)}"
+                worker.bq_remove_torrent_keep_files = True
                 worker.bq_done_event = done_event
                 worker.batch_download_event = download_event
                 active.append(

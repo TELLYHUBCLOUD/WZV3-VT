@@ -11,7 +11,6 @@ from pyrogram.errors import AuthBytesInvalid, AuthKeyDuplicated, RPCError
 from pyrogram.file_id import FileType, ThumbnailSource
 from pyrogram.raw.all import layer
 from pyrogram.session import Auth, Session
-from pyrogram.session.internals import DataCenter
 
 from ... import LOGGER
 from ...core.tg_client import TgClient
@@ -43,30 +42,7 @@ async def _tcp_tuned_connect(self, address):
             LOGGER.info(f"HypertgTCP socket tune failed: {e}")
 
 
-_orig_dc_new = DataCenter.__new__
-
-
-def _dc_alt_port(cls, dc_id, test_mode, ipv6, media):
-    ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
-    if media and not test_mode:
-        port = 5222
-    return ip, port
-
-
 TCP.connect = _tcp_tuned_connect
-_hyper_patches_applied = False
-
-
-def _apply_hyper_patches():
-    global _hyper_patches_applied
-    if _hyper_patches_applied:
-        return
-    try:
-        DataCenter.__new__ = staticmethod(_dc_alt_port)
-        _hyper_patches_applied = True
-        LOGGER.info("Applied Hyper DC media port 5222")
-    except Exception as e:
-        LOGGER.warning(f"Failed to apply Hyper DC port patch: {e}")
 
 
 MB = 1024 * 1024
@@ -74,7 +50,6 @@ MB = 1024 * 1024
 
 class HypertgTransfer:
     def __init__(self, obj):
-        _apply_hyper_patches()
         self._obj = obj
         self._listener = obj._listener
         self.clients = TgClient.helper_bots
@@ -102,6 +77,7 @@ class HypertgTransfer:
 
     @staticmethod
     async def start_session(s, mode=3):
+        _ports = [443, 5222] if s.is_media and not s.test_mode else None
         while True:
             s.connection = Connection(
                 s.dc_id,
@@ -111,6 +87,10 @@ class HypertgTransfer:
                 s.is_media,
                 mode=mode,
             )
+            if _ports:
+                ip, _ = s.connection.address
+                s.connection.address = (ip, _ports[0])
+                _ports.append(_ports.pop(0))
             try:
                 await s.connection.connect()
                 s.network_task = s.client.loop.create_task(s.network_worker())

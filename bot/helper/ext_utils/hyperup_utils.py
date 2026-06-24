@@ -108,16 +108,16 @@ class HypertgUpload(HypertgTransfer):
                 _concurrent = 1
 
             _is_bot = bool(getattr(getattr(up_client, "me", None), "is_bot", True))
-            n_workers = max(1, (4 if _is_bot else 2) // _concurrent)
+            n_workers = 4 if _is_bot else 2
 
             fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
             q = Queue(n_workers * 4)
 
             tm = await client.storage.test_mode()
-            ak, is_cross = await self.create_auth(client, dc_id, tm)
+            ak, is_cross = await self.create_auth(up_client, dc_id, tm)
             ea = None
             if is_cross:
-                ea = await client.invoke(
+                ea = await up_client.invoke(
                     raw.functions.auth.ExportAuthorization(dc_id=dc_id)
                 )
 
@@ -142,7 +142,7 @@ class HypertgUpload(HypertgTransfer):
                                 raise
                             except CancelledError:
                                 return
-                            except (OSError, TimeoutError, ConnectionError):
+                            except (OSError, TimeoutError, ConnectionError, RuntimeError):
                                 LOGGER.warning(
                                     f"HypertgUL worker {wid} transport error "
                                     f"attempt {attempt + 1}/5 — reconnecting"
@@ -162,7 +162,7 @@ class HypertgUpload(HypertgTransfer):
                                 await sleep(1)
                             except Exception:
                                 if attempt == 4:
-                                    break
+                                    raise
                                 await sleep(2**attempt)
                 finally:
                     try:
@@ -233,7 +233,7 @@ class HypertgUpload(HypertgTransfer):
                     parts=file_total_parts,
                     name=ospath.basename(file_path),
                 )
-            return result
+            return result, up_client
         except StopTransmission:
             LOGGER.warning("HypertgUL upload cancelled (StopTransmission)")
             raise
@@ -376,30 +376,31 @@ class HypertgUpload(HypertgTransfer):
         self._up_file = ospath.basename(file_path)
         self._up_size = ospath.getsize(file_path)
 
+        ul_client = target_client
         if self._up_size > 10 * MB:
-            input_file = await self._upload_file(target_client, file_path)
+            input_file, ul_client = await self._upload_file(target_client, file_path)
         else:
             input_file = await self._upload_small(target_client, file_path)
 
         thumb_file = None
         if thumb_path and ospath.exists(thumb_path) and ospath.getsize(thumb_path) > 0:
-            thumb_file = await self._upload_thumb(target_client, thumb_path)
+            thumb_file = await self._upload_thumb(ul_client, thumb_path)
 
         mime_type = self._mime(file_path)
         input_media = self._build_media(
             input_file, mime_type, media_type, attributes, thumb_file
         )
 
-        peer = await target_client.resolve_peer(target_chat_id)
+        peer = await ul_client.resolve_peer(target_chat_id)
 
         parsed = await utils.parse_text_entities(
-            target_client, caption or "", None, None
+            ul_client, caption or "", None, None
         )
 
         rpc = raw.functions.messages.SendMedia(
             peer=peer,
             media=input_media,
-            random_id=target_client.rnd_id(),
+            random_id=ul_client.rnd_id(),
             reply_to=raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_message_id)
             if reply_to_message_id
             else None,
@@ -412,7 +413,7 @@ class HypertgUpload(HypertgTransfer):
         missing_fixed = 0
         while True:
             try:
-                r_updates = await target_client.invoke(rpc)
+                r_updates = await ul_client.invoke(rpc)
                 break
             except FilePartMissing as e:
                 part = self._parse_missing_part(e)
@@ -421,7 +422,7 @@ class HypertgUpload(HypertgTransfer):
                     f"HypertgUL SendMedia missing part {part} "
                     f"(fixed {missing_fixed}) {self._up_file}"
                 )
-                await self._reupload_part(target_client, file_path, input_file, part)
+                await self._reupload_part(ul_client, file_path, input_file, part)
                 send_retries += 1
                 if send_retries >= 100:
                     raise RuntimeError(
@@ -461,7 +462,7 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.error("HypertgUL no UpdateNewMessage in response")
             raise ValueError("No UpdateNewMessage in SendMedia response")
 
-        msg = await target_client.get_messages(
+        msg = await ul_client.get_messages(
             chat_id=target_chat_id, message_ids=msg_id
         )
         return msg

@@ -200,7 +200,6 @@ class TgClient:
         cls.bot = cls.wztgClient(
             f"WZ-Bot{cls.ID}",
             bot_token=Config.BOT_TOKEN,
-            workdir="/usr/src/app",
         )
         while True:
             try:

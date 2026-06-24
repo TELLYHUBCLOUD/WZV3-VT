@@ -281,8 +281,8 @@ USENET_SERVERS = [
 ]
 
 # Update
-UPSTREAM_REPO = ""
-UPSTREAM_BRANCH = "master"
+UPSTREAM_REPO = "https://github.com/mari8438/WZML-X"
+UPSTREAM_BRANCH = "starfallx-v1.2-video-tools"
 UPDATE_PKGS = True
 
 # Leech

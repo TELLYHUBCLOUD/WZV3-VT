@@ -4,10 +4,15 @@ from contextlib import suppress
 from secrets import token_hex
 
 from aiofiles.os import makedirs
-from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock, user_data
 from ....core.config_manager import Config
+from ...ext_utils.mega_compat import (
+    MegaApi,
+    MegaCancelToken,
+    MegaSdkUnavailable,
+    ensure_mega_sdk,
+)
 from ...telegram_helper.message_utils import send_status_message
 from ...ext_utils.task_manager import (
     check_running_tasks,
@@ -108,6 +113,11 @@ async def add_mega_download(listener, path):
         await listener.on_download_error(
             "Mega Link downloads are currently disabled by the Bot Owner."
         )
+        return
+    try:
+        ensure_mega_sdk()
+    except MegaSdkUnavailable as e:
+        await listener.on_download_error(str(e))
         return
 
     user_dict = user_data.get(listener.user_id, {})

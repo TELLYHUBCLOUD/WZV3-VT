@@ -11,7 +11,8 @@ from concurrent.futures import Future
 from re import match as rematch
 from time import time
 
-from mega import (
+from ..ext_utils.mega_compat import (
+    MEGA_SDK_AVAILABLE,
     MegaApi,
     MegaError,
     MegaListener,
@@ -25,6 +26,9 @@ from ..ext_utils.bot_utils import async_to_sync, sync_to_async
 
 
 async def mega_cleanup():
+    if not MEGA_SDK_AVAILABLE:
+        return
+
     from ... import task_dict, task_dict_lock
 
     tasks = []

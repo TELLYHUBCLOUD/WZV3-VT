@@ -10,9 +10,14 @@ from mimetypes import guess_type
 from secrets import token_hex
 
 from aiofiles.os import makedirs, path as aiopath
-from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock
+from ...ext_utils.mega_compat import (
+    MegaApi,
+    MegaCancelToken,
+    MegaSdkUnavailable,
+    ensure_mega_sdk,
+)
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import clean_download
 from ...listeners.mega_listener import (
@@ -149,6 +154,12 @@ async def _upload_file(
 
 
 async def add_mega_upload(listener, path, mega_email, mega_password, gid):
+    try:
+        ensure_mega_sdk()
+    except MegaSdkUnavailable as e:
+        await listener.on_upload_error(str(e))
+        return
+
     if not mega_email or not mega_password:
         await listener.on_upload_error("Mega credentials not configured for this user.")
         return

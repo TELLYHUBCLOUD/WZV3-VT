@@ -1,9 +1,15 @@
 from shutil import rmtree as shutil_rmtree
 from tempfile import mkdtemp
 
-from mega import MegaApi, MegaError, MegaListener, MegaRequest
-
 from .bot_utils import sync_to_async
+from .mega_compat import (
+    MegaApi,
+    MegaError,
+    MegaListener,
+    MegaRequest,
+    MegaSdkUnavailable,
+    ensure_mega_sdk,
+)
 from .status_utils import get_readable_file_size
 
 
@@ -166,6 +172,11 @@ def _get_mega_account_info_sync(email: str, password: str) -> str:
 
     if not email or not password:
         return "⌬ <b>Mega Account Info</b>\n│\n┖ <i>No credentials configured.</i>"
+
+    try:
+        ensure_mega_sdk()
+    except MegaSdkUnavailable as e:
+        return f"âŒ¬ <b>Mega Account Info</b>\nâ”‚\nâ”– {e}"
 
     base_dir = mkdtemp(prefix=".mega_account_")
 

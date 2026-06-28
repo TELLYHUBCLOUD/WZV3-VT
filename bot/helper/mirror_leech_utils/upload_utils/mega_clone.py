@@ -3,9 +3,9 @@ from asyncio import sleep as asleep
 from secrets import token_hex
 
 from aiofiles.os import makedirs
-from mega import MegaApi
 
 from .... import LOGGER, task_dict, task_dict_lock
+from ...ext_utils.mega_compat import MegaApi, MegaSdkUnavailable, ensure_mega_sdk
 from ...telegram_helper.message_utils import update_status_message
 from ...listeners.mega_listener import (
     AsyncMega,
@@ -17,6 +17,12 @@ from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 
 
 async def add_mega_clone(listener, link, mega_email, mega_password, gid):
+    try:
+        ensure_mega_sdk()
+    except MegaSdkUnavailable as e:
+        await listener.on_upload_error(str(e))
+        return None, 0, 0
+
     if not mega_email or not mega_password:
         await listener.on_upload_error("Mega credentials not configured for this user.")
         return None, 0, 0

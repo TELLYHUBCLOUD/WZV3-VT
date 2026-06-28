@@ -4,7 +4,12 @@ FROM --platform=$TARGETPLATFORM mysterysd/wzmlx:v3
 WORKDIR /usr/src/app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends mediainfo mktorrent \
+    && apt-get install -y --no-install-recommends \
+       ffmpeg \
+       aria2 \
+       qbittorrent-nox \
+       mediainfo \
+       mktorrent \
     && rm -rf /var/lib/apt/lists/*
 
 RUN chmod 777 /usr/src/app

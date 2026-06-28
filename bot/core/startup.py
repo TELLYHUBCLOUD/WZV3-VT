@@ -41,6 +41,56 @@ def _qbit_password():
     )
 
 
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+ARIA2_DOWNLOAD_ONLY_PERF_KEYS = {
+    "continue",
+    "max-connection-per-server",
+    "split",
+    "min-split-size",
+    "seed-ratio",
+    "seed-time",
+    "timeout",
+    "retry-wait",
+}
+
+
+def _aria2_global_performance_options():
+    return {
+        "max-concurrent-downloads": str(
+            max(1, _safe_int(Config.ARIA2_MAX_CONCURRENT_DOWNLOADS, 4))
+        ),
+        "max-overall-download-limit": str(Config.ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT or "0"),
+        "max-overall-upload-limit": str(Config.ARIA2_MAX_OVERALL_UPLOAD_LIMIT or "1M"),
+    }
+
+
+def aria2_download_performance_options():
+    return {
+        "continue": "true",
+        "max-connection-per-server": str(
+            max(1, _safe_int(Config.ARIA2_MAX_CONNECTION_PER_SERVER, 16))
+        ),
+        "split": str(max(1, _safe_int(Config.ARIA2_SPLIT, 16))),
+        "min-split-size": str(Config.ARIA2_MIN_SPLIT_SIZE or "1M"),
+        "seed-ratio": "0",
+        "seed-time": "0",
+        "timeout": "60",
+        "retry-wait": "5",
+    }
+
+
+def _strip_download_only_aria2_options(options):
+    for key in ARIA2_DOWNLOAD_ONLY_PERF_KEYS:
+        options.pop(key, None)
+    return options
+
+
 async def _start_background_process(component, cmd, *, env=None, must_keep_running=True):
     proc = await create_subprocess_exec(*cmd, env=env)
     await sleep(1)
@@ -98,10 +148,16 @@ async def update_qb_options():
 
 async def update_aria2_options():
     LOGGER.info("Get aria2 options from server")
+    perf_options = _aria2_global_performance_options()
     if not aria2_options:
         op = await TorrentManager.aria2.getGlobalOption()
         aria2_options.update(op)
+        _strip_download_only_aria2_options(aria2_options)
+        aria2_options.update(perf_options)
+        await TorrentManager.aria2.changeGlobalOption(perf_options)
     else:
+        _strip_download_only_aria2_options(aria2_options)
+        aria2_options.update(perf_options)
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
 
 

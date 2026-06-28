@@ -14,6 +14,7 @@ from .. import (
     sabnzbd_client,
     DOWNLOAD_DIR,
 )
+from ..core.config_manager import Config
 from ..core.torrent_manager import TorrentManager
 from ..core.jdownloader_booter import jdownloader
 from ..helper.ext_utils.bot_utils import new_task
@@ -56,7 +57,12 @@ async def task_status(_, message):
     else:
         text = message.text.split()
         if len(text) > 1:
-            user_id = message.from_user.id if text[1] == "me" else int(text[1])
+            if text[1] == "me":
+                user_id = message.from_user.id
+            elif text[1].lstrip("-").isdigit():
+                user_id = int(text[1])
+            else:
+                user_id = 0
         else:
             user_id = 0
             sid = message.chat.id
@@ -154,7 +160,7 @@ async def status_pages(_, query):
             dl_speed, seed_speed = await TorrentManager.overall_speed()
 
         if any(eng == eng_status.STATUS_SABNZBD for _, __, eng in status_results):
-            if sabnzbd_client.LOGGED_IN:
+            if not Config.DISABLE_NZB and sabnzbd_client.LOGGED_IN:
                 dl_speed += (
                     int(
                         float(
@@ -167,7 +173,7 @@ async def status_pages(_, query):
                 )
 
         if any(eng == eng_status.STATUS_JD for _, __, eng in status_results):
-            if jdownloader.is_connected:
+            if not Config.DISABLE_JD and jdownloader.is_connected:
                 dl_speed += (
                     await jdownloader.device.downloadcontroller.get_speed_in_bytes()
                 )

@@ -1,6 +1,12 @@
 from asyncio import gather
 from logging import getLogger
 
+from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.devuploads_uploader import (
+    DevUploadsUpload,
+)
+from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.vikingfile_uploader import (
+    VikingFileUpload,
+)
 from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.buzzheavier_uploader import (
     BuzzHeavierUpload,
 )
@@ -17,6 +23,8 @@ SERVICE_MAP = {
     "gofile": GoFileUpload,
     "buzzheavier": BuzzHeavierUpload,
     "pixeldrain": PixelDrainUpload,
+    "devuploads": DevUploadsUpload,
+    "vikingfile": VikingFileUpload,
 }
 
 
@@ -35,9 +43,7 @@ class MultiUphosterUpload:
         for service in services:
             uploader_cls = SERVICE_MAP.get(service)
             if uploader_cls:
-                self.uploaders.append(
-                    uploader_cls(ProxyListener(self, service), path)
-                )
+                self.uploaders.append(uploader_cls(ProxyListener(self, service), path))
 
     @property
     def speed(self):
@@ -80,13 +86,9 @@ class MultiUphosterUpload:
     async def _check_completion(self):
         if len(self.results) == len(self.services):
             if len(self.failed) == len(self.services):
-                await self.listener.on_upload_error(
-                    "All uphoster uploads failed!"
-                )
+                await self.listener.on_upload_error("All uphoster uploads failed!")
             else:
-                first_success = next(
-                    s for s in self.services if s not in self.failed
-                )
+                first_success = next(s for s in self.services if s not in self.failed)
                 result = self.results[first_success]
                 await self.listener.on_upload_complete(
                     link=self.results,

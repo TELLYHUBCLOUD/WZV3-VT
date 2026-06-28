@@ -1,9 +1,89 @@
 services:
   app:
-    build: .
-    command: bash start.sh
-    restart: on-failure
-    network_mode: "host"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Kolkata
+      PYTHONUNBUFFERED: "1"
+      PORT: "8080"
     volumes:
-      - ./torrents:/usr/src/app/torrents
       - ./config.py:/usr/src/app/config.py:ro
+      - ./accounts:/usr/src/app/accounts
+      - ./downloads:/usr/src/app/downloads
+      - ./logs:/usr/src/app/logs
+      - ./rclone:/usr/src/app/rclone
+      - ./thumbnails:/usr/src/app/thumbnails
+      - tunnel_data:/data:ro
+    ports:
+      - "8080:8080"
+    expose:
+      - "8080"
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  tunnel:
+    build:
+      context: .
+      dockerfile: tunnel.Dockerfile
+    init: true
+    restart: unless-stopped
+    network_mode: "service:app"
+    volumes:
+      - tunnel_data:/data
+
+  # Second instance example:
+  # app2:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   init: true
+  #   restart: unless-stopped
+  #   environment:
+  #     TZ: Asia/Kolkata
+  #     PYTHONUNBUFFERED: "1"
+  #     PORT: "8080"
+  #     TUNNEL_URL_FILE: /data/tunnel2_url.txt
+  #   volumes:
+  #     - ./config2.py:/usr/src/app/config.py:ro
+  #     - ./app2.accounts:/usr/src/app/accounts
+  #     - ./app2.downloads:/usr/src/app/downloads
+  #     - ./app2.logs:/usr/src/app/logs
+  #     - ./app2.rclone:/usr/src/app/rclone
+  #     - ./app2.thumbnails:/usr/src/app/thumbnails
+  #     - tunnel_data:/data:ro
+  #   expose:
+  #     - "8080"
+  #
+  # tunnel2:
+  #   build:
+  #     context: .
+  #     dockerfile: tunnel.Dockerfile
+  #   init: true
+  #   restart: unless-stopped
+  #   network_mode: "service:app2"
+  #   environment:
+  #     TUNNEL_URL_FILE: /data/tunnel2_url.txt
+  #   volumes:
+  #     - tunnel_data:/data
+  #
+  # Optional named Cloudflare tunnel:
+  # 1. Go to https://dash.cloudflare.com/ -> Networking -> Tunnels -> Create a tunnel.
+  # 2. Choose the Cloudflared connector type, name your tunnel, and save.
+  # 3. Under Connectors, copy the token from the install command.
+  # 4. Under Public Hostname, route your domain to HTTP localhost:8080.
+  # tunnel:
+  #   image: cloudflare/cloudflared:latest
+  #   restart: unless-stopped
+  #   command: tunnel --no-autoupdate run --token <YOUR_TOKEN>
+  #   network_mode: "service:app"
+
+volumes:
+  tunnel_data:

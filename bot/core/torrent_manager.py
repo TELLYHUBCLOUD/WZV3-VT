@@ -1,10 +1,12 @@
-from asyncio import TimeoutError, gather
+from asyncio import TimeoutError, create_subprocess_exec, gather, sleep
 from contextlib import suppress
 from inspect import iscoroutinefunction
 from pathlib import Path
+from os import getcwd
+from shutil import which
 
 from aioaria2 import Aria2WebsocketClient
-from aiohttp import ClientError
+from aiohttp import ClientError, ClientSession
 from aioqbt.client import create_client
 from tenacity import (
     retry,
@@ -14,7 +16,7 @@ from tenacity import (
 )
 
 from .. import LOGGER, aria2_options
-from .config_manager import Config
+from .config_manager import BinConfig, Config
 
 
 def wrap_with_retry(obj, max_retries=3):
@@ -36,6 +38,50 @@ def wrap_with_retry(obj, max_retries=3):
     return obj
 
 
+async def _connect_aria2(retries=5, delay=2):
+    from aioaria2.exceptions import Aria2rpcException
+
+    for i in range(retries):
+        try:
+            return await Aria2WebsocketClient.new("http://localhost:6800/jsonrpc")
+        except Aria2rpcException:
+            if i == retries - 1:
+                raise
+            await sleep(delay)
+
+
+async def _wait_for_http(url, name, retries=30, delay=1):
+    last_error = None
+    for _ in range(retries):
+        try:
+            async with ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status < 500:
+                        return
+        except Exception as e:
+            last_error = e
+        await sleep(delay)
+    raise RuntimeError(f"{name} did not become ready at {url}: {last_error}")
+
+
+def _resolve_qbit_binary():
+    qbit_name = BinConfig.QBIT_NAME
+    qbit_path = which(qbit_name)
+    if not qbit_path and qbit_name != "qbittorrent-nox":
+        LOGGER.warning(
+            f"qBittorrent binary '{qbit_name}' was not found. "
+            "Trying fallback 'qbittorrent-nox'."
+        )
+        qbit_name = "qbittorrent-nox"
+        qbit_path = which(qbit_name)
+    if not qbit_path:
+        raise FileNotFoundError(
+            f"qBittorrent binary '{BinConfig.QBIT_NAME}' was not found and "
+            "fallback 'qbittorrent-nox' is unavailable."
+        )
+    return qbit_path
+
+
 class TorrentManager:
     aria2 = None
     qbittorrent = None
@@ -45,12 +91,23 @@ class TorrentManager:
         if cls.aria2:
             return
         try:
-            cls.aria2 = await Aria2WebsocketClient.new("http://localhost:6800/jsonrpc")
+            cls.aria2 = await _connect_aria2()
             LOGGER.info("Aria2 initialized successfully.")
 
             if Config.DISABLE_TORRENTS:
                 LOGGER.info("Torrents are disabled.")
                 return
+
+            proc = await create_subprocess_exec(
+                _resolve_qbit_binary(),
+                "-d",
+                f"--profile={getcwd()}/configs/qbittorrent",
+            )
+            LOGGER.info(f"qBittorrent started (PID: {proc.pid})")
+            await _wait_for_http(
+                "http://127.0.0.1:8090/api/v2/app/version",
+                "qBittorrent Web API",
+            )
 
             cls.qbittorrent = await create_client("http://localhost:8090/api/v2/")
             cls.qbittorrent = wrap_with_retry(cls.qbittorrent)

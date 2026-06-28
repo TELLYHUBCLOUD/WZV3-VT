@@ -1,20 +1,21 @@
-from asyncio import create_subprocess_exec, create_subprocess_shell, sleep
+from asyncio import create_subprocess_exec, gather, sleep
 from importlib import import_module
-from os import environ, getenv, path as ospath
+from os import environ, path as ospath, getenv
 
 from aiofiles import open as aiopen
 from aiofiles.os import makedirs, remove, path as aiopath
 from aioshutil import rmtree
 
-from sabnzbdapi.exception import APIResponseError
 
 from .. import (
     LOGGER,
     aria2_options,
     auth_chats,
+    categories_dict,
     drives_ids,
     drives_names,
     index_urls,
+    list_drives_dict,
     shortener_dict,
     var_list,
     user_data,
@@ -25,76 +26,23 @@ from .. import (
     sabnzbd_client,
     sudo_users,
 )
+from ..helper.ext_utils.bot_utils import derive_service_password
 from ..helper.ext_utils.db_handler import database
 from .config_manager import Config, BinConfig
-from .tg_client import TgClient
+from .tg_client import TgClient, db_partition_id
 from .torrent_manager import TorrentManager
 
 
-def _safe_int(value, default=0):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-ARIA2_DOWNLOAD_ONLY_PERF_KEYS = {
-    "continue",
-    "max-connection-per-server",
-    "split",
-    "min-split-size",
-    "seed-ratio",
-    "seed-time",
-    "timeout",
-    "retry-wait",
-}
-
-
-def _aria2_global_performance_options():
-    return {
-        "max-concurrent-downloads": str(
-            max(1, _safe_int(Config.ARIA2_MAX_CONCURRENT_DOWNLOADS, 4))
-        ),
-        "max-overall-download-limit": str(Config.ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT or "0"),
-        "max-overall-upload-limit": str(Config.ARIA2_MAX_OVERALL_UPLOAD_LIMIT or "1M"),
-    }
-
-
-def aria2_download_performance_options():
-    return {
-        "continue": "true",
-        "max-connection-per-server": str(
-            max(1, _safe_int(Config.ARIA2_MAX_CONNECTION_PER_SERVER, 16))
-        ),
-        "split": str(max(1, _safe_int(Config.ARIA2_SPLIT, 16))),
-        "min-split-size": str(Config.ARIA2_MIN_SPLIT_SIZE or "1M"),
-        "seed-ratio": "0",
-        "seed-time": "0",
-        "timeout": "60",
-        "retry-wait": "5",
-    }
-
-
-def _strip_download_only_aria2_options(options):
-    for key in ARIA2_DOWNLOAD_ONLY_PERF_KEYS:
-        options.pop(key, None)
-    return options
-
-
-def _qbit_performance_options():
-    up_limit = max(0, _safe_int(Config.QBIT_UPLOAD_LIMIT, 1048576))
-    return {
-        "dl_limit": 0,
-        "up_limit": up_limit,
-        "max_active_downloads": 3,
-        "max_active_uploads": 1,
-        "max_uploads": 8,
-        "max_uploads_per_torrent": 4,
-    }
+def _qbit_password():
+    return derive_service_password(
+        (Config.BOT_TOKEN or "").split(":", 1)[0] or "0",
+        "qbit",
+    )
 
 
 async def update_qb_options():
     LOGGER.info("Get qBittorrent options from server")
+    pwd = _qbit_password()
     if not qbit_options:
         if not TorrentManager.qbittorrent:
             LOGGER.warning(
@@ -107,42 +55,41 @@ async def update_qb_options():
         for k in list(qbit_options.keys()):
             if k.startswith("rss"):
                 del qbit_options[k]
-        qbit_options["web_ui_password"] = "admin1"
-        qbit_options.update(_qbit_performance_options())
-        await TorrentManager.qbittorrent.app.set_preferences(
-            {"web_ui_password": "admin1", **_qbit_performance_options()}
-        )
+        qbit_options["web_ui_password"] = pwd
+        await TorrentManager.qbittorrent.app.set_preferences({"web_ui_password": pwd})
     else:
-        qbit_options.update(_qbit_performance_options())
+        if qbit_options.get("web_ui_password") in ("admin", "admin1", ""):
+            qbit_options["web_ui_password"] = pwd
         await TorrentManager.qbittorrent.app.set_preferences(qbit_options)
 
 
 async def update_aria2_options():
     LOGGER.info("Get aria2 options from server")
-    perf_options = _aria2_global_performance_options()
     if not aria2_options:
         op = await TorrentManager.aria2.getGlobalOption()
         aria2_options.update(op)
-        _strip_download_only_aria2_options(aria2_options)
-        aria2_options.update(perf_options)
-        await TorrentManager.aria2.changeGlobalOption(perf_options)
     else:
-        _strip_download_only_aria2_options(aria2_options)
-        aria2_options.update(perf_options)
         await TorrentManager.aria2.changeGlobalOption(aria2_options)
 
 
 async def update_nzb_options():
-    if Config.USENET_SERVERS:
-        LOGGER.info("Get SABnzbd options from server")
-        while True:
-            try:
-                no = (await sabnzbd_client.get_config())["config"]["misc"]
-                nzb_options.update(no)
-            except Exception:
-                await sleep(0.5)
-                continue
+    if Config.DISABLE_NZB or not Config.USENET_SERVERS:
+        return
+    LOGGER.info("Get SABnzbd options from server")
+    retries = 10
+    for i in range(retries):
+        try:
+            no = (await sabnzbd_client.get_config())["config"]["misc"]
+            nzb_options.update(no)
             break
+        except Exception as e:
+            if i == retries - 1:
+                LOGGER.error(
+                    f"Failed to get SABnzbd options after {retries} retries: {e}"
+                )
+                return
+            LOGGER.warning(f"SABnzbd not ready, retrying ({i + 1}/{retries}): {e}")
+            await sleep(2)
 
 
 async def load_settings():
@@ -153,7 +100,13 @@ async def load_settings():
             await rmtree(p, ignore_errors=True)
     await database.connect()
     if database.db is not None:
-        BOT_ID = Config.BOT_TOKEN.split(":", 1)[0]
+        if TgClient.PARTITION:
+            PART = str(TgClient.PARTITION)
+        else:
+            BOT_ID = Config.BOT_TOKEN.split(":", 1)[0]
+            PART = db_partition_id(BOT_ID)
+            TgClient.PARTITION = PART
+        deploy_filter = {"_id": PART}
         try:
             settings = import_module("config")
             config_file = {
@@ -172,65 +125,83 @@ async def load_settings():
         )
 
         old_config = await database.db.settings.deployConfig.find_one(
-            {"_id": BOT_ID}, {"_id": 0}
+            deploy_filter, {"_id": 0}
         )
+
+        results = await gather(
+            database.db.settings.config.find_one(deploy_filter, {"_id": 0}),
+            database.db.settings.files.find_one(deploy_filter, {"_id": 0}),
+            database.db.settings.aria2c.find_one(deploy_filter, {"_id": 0}),
+            database.db.settings.qbittorrent.find_one(deploy_filter, {"_id": 0})
+            if not Config.DISABLE_TORRENTS
+            else sleep(0),
+            database.db.settings.nzb.find_one(deploy_filter, {"_id": 0}),
+            database.db.users[PART].find_one(),
+            database.db.rss[PART].find_one(),
+        )
+
+        (
+            config_dict,
+            pf_dict,
+            a2c_options,
+            qbit_opt,
+            nzb_opt,
+            user_exists,
+            rss_exists,
+        ) = results
+
         if old_config is None:
             await database.db.settings.deployConfig.replace_one(
-                {"_id": BOT_ID}, config_file, upsert=True
+                deploy_filter, config_file, upsert=True
             )
-        if old_config and old_config != config_file:
-            LOGGER.info("Saving.. Deploy Config imported from Bot")
+            config_dict = config_dict or {}
+            for k, v in config_file.items():
+                if v is not None:
+                    config_dict.setdefault(k, v)
+        elif old_config != config_file:
+            LOGGER.info(
+                "Updating.. Deploy Config changed, merging new config.py values"
+            )
+            config_dict = config_dict or {}
+            for k, v in config_file.items():
+                if k not in old_config or old_config.get(k) != v:
+                    if v is not None:
+                        config_dict[k] = v
             await database.db.settings.deployConfig.replace_one(
-                {"_id": BOT_ID}, config_file, upsert=True
+                deploy_filter, config_file, upsert=True
             )
-            config_dict = (
-                await database.db.settings.config.find_one({"_id": BOT_ID}, {"_id": 0})
-                or {}
-            )
-            config_dict.update(config_file)
-            if config_dict:
-                Config.load_dict(config_dict)
         else:
             LOGGER.info("Updating.. Saved Config imported from MongoDB")
-            config_dict = await database.db.settings.config.find_one(
-                {"_id": BOT_ID}, {"_id": 0}
-            )
-            if config_dict:
-                Config.load_dict(config_dict)
+            config_dict = config_dict or {}
 
-        if pf_dict := await database.db.settings.files.find_one(
-            {"_id": BOT_ID}, {"_id": 0}
-        ):
+        if config_dict:
+            Config.load_dict(config_dict)
+
+        if pf_dict:
             for key, value in pf_dict.items():
                 if value:
                     file_ = key.replace("__", ".")
                     async with aiopen(file_, "wb+") as f:
                         await f.write(value)
 
-        if a2c_options := await database.db.settings.aria2c.find_one(
-            {"_id": BOT_ID}, {"_id": 0}
-        ):
+        if a2c_options:
             aria2_options.update(a2c_options)
 
-        if not Config.DISABLE_TORRENTS:
-            if qbit_opt := await database.db.settings.qbittorrent.find_one(
-                {"_id": BOT_ID}, {"_id": 0}
-            ):
-                qbit_options.update(qbit_opt)
+        if qbit_opt:
+            qbit_options.update(qbit_opt)
 
-        if nzb_opt := await database.db.settings.nzb.find_one(
-            {"_id": BOT_ID}, {"_id": 0}
-        ):
-            if await aiopath.exists("sabnzbd/SABnzbd.ini.bak"):
-                await remove("sabnzbd/SABnzbd.ini.bak")
-            ((key, value),) = nzb_opt.items()
-            file_ = key.replace("__", ".")
-            async with aiopen(f"sabnzbd/{file_}", "wb+") as f:
-                await f.write(value)
+        if nzb_opt:
+            if await aiopath.exists("configs/sabnzbd/SABnzbd.ini.bak"):
+                await remove("configs/sabnzbd/SABnzbd.ini.bak")
+            for key, value in nzb_opt.items():
+                if value:
+                    file_ = key.replace("__", ".")
+                    async with aiopen(f"configs/sabnzbd/{file_}", "wb+") as f:
+                        await f.write(value)
             LOGGER.info("Loaded.. Sabnzbd Data from MongoDB")
 
-        if await database.db.users[BOT_ID].find_one():
-            rows = database.db.users[BOT_ID].find({})
+        if user_exists:
+            rows = database.db.users[PART].find({})
             async for row in rows:
                 uid = row["_id"]
                 del row["_id"]
@@ -263,8 +234,8 @@ async def load_settings():
                 user_data[uid] = row
             LOGGER.info("Users Data has been imported from MongoDB")
 
-        if await database.db.rss[BOT_ID].find_one():
-            rows = database.db.rss[BOT_ID].find({})
+        if rss_exists:
+            rows = database.db.rss[PART].find({})
             async for row in rows:
                 user_id = row["_id"]
                 del row["_id"]
@@ -276,20 +247,26 @@ async def save_settings():
     if database.db is None:
         return
     config_file = Config.get_all()
+    if TgClient.PARTITION:
+        PART = str(TgClient.PARTITION)
+    else:
+        PART = db_partition_id(TgClient.ID)
+        TgClient.PARTITION = PART
+    deploy_filter = {"_id": PART}
     await database.db.settings.config.update_one(
-        {"_id": TgClient.ID}, {"$set": config_file}, upsert=True
+        deploy_filter, {"$set": config_file}, upsert=True
     )
-    if await database.db.settings.aria2c.find_one({"_id": TgClient.ID}) is None:
+    if await database.db.settings.aria2c.find_one(deploy_filter) is None:
         await database.db.settings.aria2c.update_one(
-            {"_id": TgClient.ID}, {"$set": aria2_options}, upsert=True
+            deploy_filter, {"$set": aria2_options}, upsert=True
         )
-    if await database.db.settings.qbittorrent.find_one({"_id": TgClient.ID}) is None:
+    if await database.db.settings.qbittorrent.find_one(deploy_filter) is None:
         await database.save_qbit_settings()
-    if await database.db.settings.nzb.find_one({"_id": TgClient.ID}) is None:
-        async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
+    if await database.db.settings.nzb.find_one(deploy_filter) is None:
+        async with aiopen("configs/sabnzbd/SABnzbd.ini", "rb+") as pf:
             nzb_conf = await pf.read()
         await database.db.settings.nzb.update_one(
-            {"_id": TgClient.ID}, {"$set": {"SABnzbd__ini": nzb_conf}}, upsert=True
+            deploy_filter, {"$set": {"SABnzbd__ini": nzb_conf}}, upsert=True
         )
 
 
@@ -300,11 +277,6 @@ async def update_variables():
         or not Config.LEECH_SPLIT_SIZE
     ):
         Config.LEECH_SPLIT_SIZE = TgClient.MAX_SPLIT_SIZE
-
-    Config.HYBRID_LEECH = bool(Config.HYBRID_LEECH and TgClient.IS_PREMIUM_USER)
-    Config.USER_TRANSMISSION = bool(
-        Config.USER_TRANSMISSION and TgClient.IS_PREMIUM_USER
-    )
 
     if Config.AUTHORIZED_CHATS:
         aid = Config.AUTHORIZED_CHATS.split()
@@ -332,6 +304,14 @@ async def update_variables():
         drives_names.append("Main")
         drives_ids.append(Config.GDRIVE_ID)
         index_urls.append(Config.INDEX_URL)
+        list_drives_dict["Main"] = {
+            "drive_id": Config.GDRIVE_ID,
+            "index_link": Config.INDEX_URL,
+        }
+        categories_dict["Root"] = {
+            "drive_id": Config.GDRIVE_ID,
+            "index_link": Config.INDEX_URL,
+        }
 
     if not Config.IMDB_TEMPLATE:
         Config.IMDB_TEMPLATE = """
@@ -360,6 +340,14 @@ async def update_variables():
                 else:
                     index_urls.append("")
 
+                sep = 2 if temp[-1].startswith("http") else 1
+                tmp = line.strip().rsplit(maxsplit=sep)
+                name = "Main Custom" if tmp[0].casefold() == "Main" else tmp[0]
+                list_drives_dict[name] = {
+                    "drive_id": tmp[1],
+                    "index_link": (tmp[2] if sep == 2 else ""),
+                }
+
     if await aiopath.exists("shortener.txt"):
         async with aiopen("shortener.txt", "r+") as f:
             lines = await f.readlines()
@@ -368,24 +356,42 @@ async def update_variables():
                 if len(temp) == 2:
                     shortener_dict[temp[0]] = temp[1]
 
+    if await aiopath.exists("categories.txt"):
+        async with aiopen("categories.txt", "r+") as f:
+            lines = await f.readlines()
+            for line in lines:
+                sep = 2 if line.strip().split()[-1].startswith("http") else 1
+                temp = line.strip().rsplit(maxsplit=sep)
+                name = "Root Custom" if temp[0].casefold() == "Root" else temp[0]
+                categories_dict[name] = {
+                    "drive_id": temp[1],
+                    "index_link": (temp[2] if sep == 2 else ""),
+                }
+
 
 async def load_configurations():
     if not await aiopath.exists(".netrc"):
         async with aiopen(".netrc", "w"):
             pass
 
-    await (
-        await create_subprocess_shell(
-            f"chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} {BinConfig.SABNZBD_NAME}"
-        )
-    ).wait()
+    from bot import service_cores
 
-    PORT = getenv("PORT", "") or Config.BASE_URL_PORT
-    if PORT:
-        await create_subprocess_shell(
-            f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}"
-        )
-        await create_subprocess_shell("python3 cron_boot.py")
+    await (await create_subprocess_exec("chmod", "600", ".netrc")).wait()
+    if await aiopath.exists("/root"):
+        await (await create_subprocess_exec("cp", ".netrc", "/root/.netrc")).wait()
+    await (await create_subprocess_exec("chmod", "+x", "setpkgs.sh")).wait()
+
+    cmd = [
+        "./setpkgs.sh",
+        BinConfig.ARIA2_NAME,
+        service_cores or "",
+        str(Config.CPU_LIMIT),
+    ]
+    if not Config.DISABLE_NZB:
+        cmd.append(BinConfig.SABNZBD_NAME)
+    proc = await create_subprocess_exec(*cmd)
+    if await proc.wait() != 0:
+        raise RuntimeError("Service bootstrap failed. Check logs above for the missing binary or daemon that did not become ready.")
 
     if await aiopath.exists("cfg.zip"):
         if await aiopath.exists("/JDownloader/cfg"):
@@ -396,7 +402,7 @@ async def load_configurations():
 
     if await aiopath.exists("accounts.zip"):
         if await aiopath.exists("accounts"):
-            await rmtree("accounts")
+            await rmtree("accounts", ignore_errors=True)
         await (
             await create_subprocess_exec(
                 "7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json"
@@ -417,3 +423,29 @@ async def load_configurations():
             await TorrentManager.qbittorrent.app.set_preferences(qbit_options)
         except Exception as e:
             LOGGER.error(f"Failed to configure qBittorrent: {e}")
+
+    PORT = getenv("PORT", "") or "8080"
+    if PORT:
+        access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD
+        if not access_pwd:
+            from secrets import token_bytes
+
+            access_pwd = token_bytes(32).hex()
+            Config.WEB_ACCESS_PASSWORD = access_pwd
+        web_env = {**environ, "WEB_ACCESS_PASSWORD": access_pwd}
+        await create_subprocess_exec(
+            "gunicorn",
+            "-k",
+            "uvicorn.workers.UvicornWorker",
+            "-w",
+            "1",
+            "web.wserver:app",
+            "--bind",
+            f"0.0.0.0:{PORT}",
+            env=web_env,
+        )
+        await create_subprocess_exec("python", "cron_boot.py")
+
+    from ..helper.ext_utils.tunnel_monitor import apply_tunnel_url_once
+
+    await apply_tunnel_url_once()

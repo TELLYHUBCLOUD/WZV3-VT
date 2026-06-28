@@ -1,4 +1,3 @@
-asyncio
 aiofiles
 aiohttp
 aioshutil
@@ -8,12 +7,10 @@ aioaria2
 aioqbt
 imdbinfo
 cloudscraper
-deep-translator
 dnspython
 fastapi
 feedparser
 google-api-python-client
-google-auth-httplib2
 google-auth-oauthlib
 gunicorn
 httpx
@@ -28,6 +25,7 @@ psutil
 pycountry
 pymongo
 pyrotgfork
+pytgcrypto
 python-magic
 pytz
 qbittorrent-api
@@ -35,9 +33,8 @@ requests
 speedtest-cli
 telegraph
 tenacity
-tgcrypto
 urllib3
 uvicorn
 uvloop
 xattr
-yt-dlp[default,curl-cffi]
+yt-dlp[default,curl-cffi]==2026.6.9

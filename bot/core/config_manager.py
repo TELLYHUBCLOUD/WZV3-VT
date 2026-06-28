@@ -1,5 +1,17 @@
+from ast import literal_eval
 from importlib import import_module
 from os import getenv
+
+
+def bin_name(index):
+    standard_bins = (
+        "aria2c",
+        "qbittorrent-nox",
+        "ffmpeg",
+        "rclone",
+        "sabnzbdplus",
+    )
+    return standard_bins[index]
 
 
 class Config:
@@ -14,9 +26,13 @@ class Config:
     BASE_URL_PORT = 80
     BOT_TOKEN = ""
     HELPER_TOKENS = ""
+    HELPER_STRINGS = ""
+    HELPER_BOT_PROXIES = ""
+    HELPER_USER_PROXIES = ""
     BOT_MAX_TASKS = 0
     BOT_PM = False
     CMD_SUFFIX = ""
+    COLORED_BTNS = True
     DEFAULT_LANG = "en"
     DATABASE_URL = ""
     DEFAULT_UPLOAD = "rc"
@@ -28,6 +44,12 @@ class Config:
     DISABLE_MULTI = False
     DISABLE_SEED = False
     DISABLE_FF_MODE = False
+    DISABLE_MEGA = False
+    DISABLE_JD = True
+    DISABLE_NZB = True
+    DISABLE_RSS = False
+    DISABLE_SEARCH = False
+    DISABLE_YTDLP = False
     EQUAL_SPLITS = False
     EXCLUDED_EXTENSIONS = ""
     FFMPEG_CMDS = {
@@ -97,13 +119,23 @@ class Config:
     PIXELDRAIN_KEY = ""
     PROTECTED_API = ""
     BUZZHEAVIER_API = ""
+    DEVUPLOADS_KEY = ""
+    DEVUPLOADS_FOLDER = ""
+    VIKINGFILE_HASH = ""
+    VIKINGFILE_FOLDER = ""
     GDRIVE_ID = ""
     GD_DESP = "Uploaded with WZ Bot"
     AUTHOR_NAME = "WZML-X"
     AUTHOR_URL = "https://t.me/WZML_X"
     INSTADL_API = ""
     IMDB_TEMPLATE = ""
-    INCOMPLETE_TASK_NOTIFIER = False
+    IMAGES = []
+    IMG_SEARCH = ""
+    IMG_PAGE = 1
+    USE_IMAGES = False
+    IMG_SOURCES = ["wallpaperflare"]
+    INC_TASK_NOTIFY = False
+    INC_TASK_RESUME = False
     INDEX_URL = ""
     IS_TEAM_DRIVE = False
     JD_EMAIL = ""
@@ -128,6 +160,7 @@ class Config:
     LINKS_LOG_ID = ""
     MIRROR_LOG_ID = ""
     CLEAN_LOG_MSG = False
+    INCOMPLETE_TASK_NOTIFIER = False
     CTORRENT_AUTO_ADD_QBIT = False
     CTORRENT_KEEP_SOURCE = True
     CTORRENT_OUTPUT_DIR = "/usr/src/app/torrents/output"
@@ -150,7 +183,12 @@ class Config:
     LEECH_SPLIT_SIZE = 2097152000
     MEDIA_GROUP = False
     HYBRID_LEECH = True
+    USE_HYPER = True
     HYPER_THREADS = 0
+    HYPER_PIPELINE = 4
+    HYPER_CHUNK = 512 * 1024
+    CPU_LIMIT = 20
+    THROTTLE_SERVICES = "auto"
     HYDRA_IP = ""
     HYDRA_API_KEY = ""
     NAME_SWAP = ""
@@ -165,7 +203,7 @@ class Config:
     SHOW_CLOUD_LINK = True
     RCLONE_SERVE_USER = ""
     RCLONE_SERVE_PASS = ""
-    RCLONE_SERVE_PORT = 8080
+    RCLONE_SERVE_PORT = 8081
     RSS_CHAT = ""
     RSS_DELAY = 600
     RSS_SIZE_LIMIT = 0
@@ -213,13 +251,16 @@ class Config:
     UPLOAD_PRIVATE_DUMP_ONLY_DOMAINS = ""
     OWNER_SESSION_STRINGS = ""
     OWNER_HELPER_BOT_TOKENS = ""
+    DRIVE_CATEGORY_MODE = False
+    DRIVE_CATEGORY_SA = ""
     UPSTREAM_REPO = ""
     UPSTREAM_BRANCH = "master"
-    UPDATE_PKGS = True
     USENET_SERVERS = []
     USER_SESSION_STRING = ""
     USER_TRANSMISSION = True
+    TRANSMISSION_MODE = "both"
     USE_SERVICE_ACCOUNTS = False
+    WEB_ACCESS_PASSWORD = ""
     WEB_PINCODE = True
     YT_DLP_OPTIONS = {}
     YT_DESP = "Uploaded with WZML-X bot"
@@ -321,6 +362,31 @@ class Config:
                 return float(value)
             except (ValueError, TypeError):
                 return original_value
+        elif isinstance(original_value, list):
+            if isinstance(value, list):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = literal_eval(value)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+                if value.startswith("[") and value.endswith("]"):
+                    return original_value
+                return [v.strip() for v in value.split(",") if v.strip()]
+            return original_value
+        elif isinstance(original_value, dict):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = literal_eval(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+            return original_value
         return value
 
     @classmethod
@@ -354,8 +420,8 @@ class Config:
 
 
 class BinConfig:
-    ARIA2_NAME = "blitzfetcher"
-    QBIT_NAME = "qbittorrent-nox"
-    FFMPEG_NAME = "mediaforge"
-    RCLONE_NAME = "ghostdrive"
-    SABNZBD_NAME = "newsripper"
+    ARIA2_NAME = bin_name(0)
+    QBIT_NAME = bin_name(1)
+    FFMPEG_NAME = bin_name(2)
+    RCLONE_NAME = bin_name(3)
+    SABNZBD_NAME = bin_name(4)

@@ -1,7 +1,5 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from google_auth_httplib2 import AuthorizedHttp
-from googleapiclient.http import build_http
 from logging import getLogger, ERROR
 from os import path as ospath, listdir
 from pickle import load as pload
@@ -74,6 +72,9 @@ class GoogleDriveHelper:
         if self.use_sa:
             json_files = listdir("accounts")
             self.sa_number = len(json_files)
+            if self.sa_number == 0:
+                LOGGER.error("No service account files found in accounts/")
+                raise ValueError("No service account files found")
             self.sa_index = randrange(self.sa_number)
             LOGGER.info(f"Authorizing with {json_files[self.sa_index]} service account")
             credentials = service_account.Credentials.from_service_account_file(
@@ -85,9 +86,11 @@ class GoogleDriveHelper:
                 credentials = pload(f)
         else:
             LOGGER.error("token.pickle not found!")
-        authorized_http = AuthorizedHttp(credentials, http=build_http())
-        authorized_http.http.disable_ssl_certificate_validation = True
-        return build("drive", "v3", http=authorized_http, cache_discovery=False)
+        if credentials is None:
+            raise ValueError(
+                "No valid credentials found. Provide a token.pickle or enable service accounts."
+            )
+        return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
     def switch_service_account(self):
         if self.sa_index == self.sa_number - 1:
@@ -135,6 +138,28 @@ class GoogleDriveHelper:
         return (
             self.service.permissions()
             .create(fileId=file_id, body=permissions, supportsAllDrives=True)
+            .execute()
+        )
+
+    @retry(
+        wait=wait_exponential(multiplier=2, min=3, max=6),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception),
+    )
+    def add_permission_user(self, file_id, email):
+        permissions = {
+            "role": "reader",
+            "type": "user",
+            "emailAddress": email,
+        }
+        return (
+            self.service.permissions()
+            .create(
+                fileId=file_id,
+                body=permissions,
+                supportsAllDrives=True,
+                sendNotificationEmail=False,
+            )
             .execute()
         )
 

@@ -1,6 +1,7 @@
 from httpx import AsyncClient
 from html import escape
 from urllib.parse import quote
+from pyrogram.enums import ButtonStyle
 
 from .. import LOGGER
 from ..core.config_manager import Config
@@ -17,7 +18,7 @@ TELEGRAPH_LIMIT = 300
 
 
 async def initiate_search_tools():
-    if Config.DISABLE_TORRENTS:
+    if Config.DISABLE_TORRENTS or Config.DISABLE_SEARCH:
         LOGGER.warning("Torrents are disabled. Skipping search plugin initialization.")
         return
     qb_plugins = await TorrentManager.qbittorrent.search.plugins()
@@ -115,7 +116,7 @@ async def search(key, site, message, method):
         await TorrentManager.qbittorrent.search.delete(search_id)
     link = await get_result(search_results, key, message, method)
     buttons = ButtonMaker()
-    buttons.url_button("🔎 VIEW", link)
+    buttons.url_button("🔎 VIEW", link, style=ButtonStyle.PRIMARY)
     button = buttons.build_menu(1)
     await edit_message(message, msg, button)
 
@@ -224,6 +225,11 @@ async def plugin_buttons(user_id):
 
 @new_task
 async def torrent_search(_, message):
+    if Config.DISABLE_SEARCH:
+        await send_message(
+            message, "Torrent search is currently disabled by the Bot Owner."
+        )
+        return
     user_id = message.from_user.id
     buttons = ButtonMaker()
     key = message.text.split()

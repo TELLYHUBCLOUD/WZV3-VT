@@ -1,442 +1,309 @@
 <p align="center">
-  <img src="docs/WZML-X.png" alt="WZML-X logo" width="420">
+   <img src="docs/WZML-X.png" alt="WZML-X logo" width="420">
 </p>
 
-<h1 align="center">StarFallX WZML-X v1.2</h1>
+<h1 align="center">WZML-X</h1>
 
 <p align="center">
-  A StarFallX-flavoured WZML-X build focused on Telegram leeching, Video Tools, anime/media thumbnails, AutoRename, Auto Process, helper-token uploads, and safer FFmpeg handling.
+   Telegram mirroring and leeching platform with a container-based runtime, a lightweight web UI, and a configurable transfer pipeline.
 </p>
 
-> Special thanks to aquib and the WZML-X/mirror-leech community.  
-> This is a dropout/experimental feature project: if any feature is useful, deploy it, copy it, improve it, or develop it further.
+<p align="center">
+   <a href="https://github.com/SilentDemonSD/WZML-X">
+      <img src="https://img.shields.io/github/stars/SilentDemonSD/WZML-X?style=for-the-badge&logo=github&label=Stars" alt="Stars">
+   </a>
+
+   <a href="https://github.com/SilentDemonSD/WZML-X/search?l=python">
+      <img src="https://img.shields.io/github/languages/top/SilentDemonSD/WZML-X?style=for-the-badge&logo=python&label=Python" alt="Python">
+   </a>
+
+   <a href="https://github.com/SilentDemonSD/WZML-X/blob/main/docker-compose.yml">
+      <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker Compose">
+   </a>
+
+   <a href="https://t.me/WZML_X">
+      <img src="https://img.shields.io/badge/Telegram-Community-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram">
+   </a>
+
+   <a href="https://github.com/SilentDemonSD/WZML-X/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/SilentDemonSD/WZML-X?style=for-the-badge&label=License" alt="License">
+   </a>
+
+   <a href="https://github.com/SilentDemonSD/WZML-X/commits/main">
+      <img src="https://img.shields.io/github/last-commit/SilentDemonSD/WZML-X?style=for-the-badge&label=Last%20Commit" alt="Last Commit">
+   </a>
+</p>
 
 ## Index
 
-- [What This Build Adds](#what-this-build-adds)
-- [Quick Deploy](#quick-deploy)
-- [Required Config](#required-config)
-- [Video Tools](#video-tools)
-- [Auto Process](#auto-process)
-- [AutoRename](#autorename)
-- [Auto Thumbnail](#auto-thumbnail)
-- [Intro Subtitles](#intro-subtitles)
-- [Batch Leech](#batch-leech)
-- [Create Torrent](#create-torrent)
-- [StarFallX Upload Engine](#starfallx-upload-engine)
-- [Settings Backup](#settings-backup)
-- [Restart Recovery](#restart-recovery)
-- [CPU And Performance](#cpu-and-performance)
-- [Testing And Support](#testing-and-support)
-- [Known Limits](#known-limits)
-- [Credits](#credits)
+<details open>
+   <summary>Table of Contents <kbd>Click Here</kbd></summary>
 
-## What This Build Adds
+   - [At a Glance](#at-a-glance)
+   - [Why Use It](#why-use-it)
+   - [What It Covers](#what-it-covers)
+   - [How It Runs](#how-it-runs)
+   - [Deployment](#deployment)
+   - [Configuration](#configuration)
+   - [Project Layout](#project-layout)
+   - [Documentation](#documentation)
+   - [Support](#support)
+   - [Credits](#credits)
+   - [License](#license)
+</details>
 
-This repo keeps the WZML-X mirror/leech base and adds a media-focused StarFallX layer:
+## At a Glance
 
-| Area | Features |
+| Area | Details |
 |---|---|
-| Video Tools | Manual `-vt`, stream remove/extract, track order, merge tracks, subtitle translate, video+video merge |
-| Auto Process | Unzip, order tracks, remove streams, smart merge, intro subtitles, metadata, AutoRename, sequential upload |
-| Thumbnail | TMDb -> AniList -> MyAnimeList -> local FFmpeg frame fallback, HD provider images, auto video cover support |
-| AutoRename | Reverse template creator, dotted/underscored filename parsing, DS4K variable, audio codec/channel tags |
-| Upload | StarFallX helper-token routing, user helper tokens, global helper pool, premium user-session support |
-| Safety | FFmpeg queue, archive queue, CPU/RAM guards, quieter process messages |
-| Batch | `/bleech` for many links and `/bqleech` for huge qB torrents in ordered batches |
-| Release pack | `/ctorrent` thumbnail, contact sheet, BBCode description, torrent file |
+| Runtime | Python Telegram bot + web UI |
+| Deployment | Docker & Docker Compose |
+| Required config | `BOT_TOKEN`, `TELEGRAM_API`, `TELEGRAM_HASH`, `OWNER_ID`, `DATABASE_URL` |
+| License | [LICENSE](LICENSE) |
 
-## Quick Deploy
+## Why Use It
 
-Use Docker Compose on a Linux VPS. This build is tested mainly on Linux. Heroku container files and ARM/buildx-friendly Docker files are present, but ARM and Heroku are not fully tested.
+WZML-X is built for users who want a single bot stack that can mirror, leech, manage files, and expose a simple web-based selection flow without stitching together multiple tools. The README focuses on what you need to deploy it quickly, understand the moving parts, and tune the behavior safely.
 
-```bash
-git clone https://github.com/YOUR_USERNAME/WZML-X.git
-cd WZML-X
-cp config_sample.py config.py
-nano config.py
-docker compose build --no-cache
-docker compose up -d
-docker compose logs -f
-```
-
-If the bot says `BOT_TOKEN variable is missing`, confirm `config.py` exists in the repo root and Docker Compose mounts it into `/usr/src/app/config.py`.
+## What It Covers
 
-```bash
-ls -l config.py
-grep -n "config.py" docker-compose.yml
-```
-
-## Required Config
+| Capability | Outcome |
+|---|---|
+| Mirroring | Send files to Telegram with a controllable pipeline |
+| Leeching | Deliver files in the format you prefer, including document and media workflows |
+| File selection UI | Review and select torrent / NZB / upload contents before finalizing |
+| Multi-source downloads | Use qBittorrent, Aria2, JDownloader, Mega, NZB, and yt-dlp integrations |
+| Storage and upload paths | Push content to Google Drive, Rclone, Mega, and other supported routes |
+| Automation | Limit tasks, tune queues, and manage startup updates from one config layer |
 
-Minimum values:
+## How It Runs
+
+Deploy with Docker and provide the required configuration values. The container takes care of the runtime path, so users only need to build or start the image and set their settings.
 
-```python
-BOT_TOKEN = ""
-TELEGRAM_API = 0
-TELEGRAM_HASH = ""
-OWNER_ID = 0
-DATABASE_URL = ""
-```
+<details>
+   <summary>What you need <kbd>Click Here</kbd></summary>
 
-Recommended media values:
+   - Docker installed
+   - Your Telegram bot token and Telegram API credentials
+   - A MongoDB connection string
+   - The optional service credentials you want to enable, such as Drive, Rclone, Mega, JDownloader, or SABnzbd
+</details>
 
-```python
-USER_SESSION_STRING = ""
-LEECH_DUMP_CHAT = ""
-TMDB_ACCESS_TOKEN = ""
-AUTO_THUMBNAIL = True
-AUTORENAME = True
-SEQUENTIAL_LEECH = True
-```
+## Deployment
 
-For anime fallback thumbnails, MyAnimeList is optional:
+<details open>
+   <summary>VPS / Dedicated Server (Recommended)</summary>
 
-```python
-MYANIMELIST_CLIENT_ID = ""
-MYANIMELIST_CLIENT_NAME = ""
-```
+   ```bash
+   git clone https://github.com/SilentDemonSD/WZML-X.git
+   cd WZML-X
+   cp config_sample.py config.py
+   # Edit config.py with your values
+   docker compose up -d --build
+   ```
 
-## Video Tools
+   The bot runs behind a Cloudflare quick tunnel by default. Check the tunnel URL:
 
-Manual Video Tools are opened with `-vt`:
+   ```bash
+   docker compose logs tunnel
+   ```
 
-```text
-/l <link> -vt
-/l <link> -vt -e
-/l <link> -vt -i 12
-```
+   You'll see a `https://*.trycloudflare.com` URL. That's your bot's web UI.
 
-When `-vt` is used, the bot waits for the download/extract to finish if streams are not available yet, then opens the Video Tools UI.
+   To stop:
 
-Supported actions:
+   ```bash
+   docker compose down
+   ```
+</details>
 
-- Remove Stream
-- Extract Stream
-- Change Order
-- Audio Order
-- Subtitle Order
-- Merge Tracks
-- Translate Subs
-- Video + Video
+<details>
+   <summary>VPS with VPN (Gluetun)</summary>
 
-Extract Stream is exclusive. If you choose Extract Stream, the bot uploads only the extracted audio/subtitle files and does not apply video metadata, intro subtitle, or AutoRename to the extracted folder.
+   1. Uncomment the `gluetun` service in `docker-compose.yml`
+   2. Fill in your VPN provider credentials
+   3. Set `network_mode: "service:gluetun"` on the `app` service
+   4. Start:
 
-Audio/subtitle order accepts short language names:
+   ```bash
+   docker compose up -d --build
+   ```
 
-```text
-tam tel eng
-```
+   All traffic (including the cloudflared tunnel) routes through the VPN.
+</details>
 
-If keep mode is active, unmatched streams are removed. If order mode is active without keep mode, matched streams are moved first and safe remaining streams are preserved.
+<details>
+   <summary>Multi-Instance (Multiple Bots)</summary>
 
-Video + Video merge:
+   Each bot needs its own `config.py` and data volumes. Example for a second bot:
 
-```text
-/l <first-link> -vt -i 12
-```
+   1. Create `config2.py` with different `BOT_TOKEN`, `OWNER_ID`, etc.
+   2. Uncomment `app2` and `tunnel2` in `docker-compose.yml`
+   3. Edit volume mounts to use `config2.py` and separate data dirs
+   4. Start:
 
-The bot asks for total video files, downloads them in order, sends a planner, and merges with FFmpeg concat when the inputs are compatible.
+   ```bash
+   docker compose up -d --build
+   ```
 
-## Auto Process
+   Each bot gets its own cloudflared tunnel URL. Admin ports (qBittorrent, SABnzbd) are mapped to different host ports (`127.0.0.1:8091`, etc.).
+</details>
 
-Auto Process flow:
+<details>
+   <summary>Single Container (Manual)</summary>
 
-```text
-download -> unzip -> order tracks -> remove streams -> smart merge -> intro subtitle -> metadata -> auto rename -> sequential upload
-```
-
-Useful settings:
-
-- Auto Process
-- Auto Leech
-- Auto Unzip
-- Auto Remove Streams
-- Keep Audios
-- Keep Subtitles
-- Audios Order
-- Subtitles Order
-- Auto Merge
-- Intro Subtitle
-- Metadata
-- AutoRename
-
-Rules:
-
-- Auto Remove conflicts with keep/order values. Enable only one style.
-- Keep Audios/Subtitles accepts values such as `tam eng`.
-- Audios Order/Subtitles Order accepts ordered values such as `tam tel eng`.
-- Auto Process sends only planners, warnings, and finish messages. Detailed speed/progress stays in `/status`.
-
-## AutoRename
-
-AutoRename supports direct templates and reverse-template creation.
-
-Example source name:
-
-```text
-[S01E08] Off Campus (2026) 1080p 10bit AMZN WEBRip x265 [Tamil-DDP 5.1] ESub ~ PSA
-```
-
-Example generated template:
-
-```text
-[S{season}E{episode}] {name} {year} {resolution} {bit} {ott} {quality} {codec} [{languages}-{audio_codec} {audio_channels}] {shortsub} ~ {release_group}
-```
-
-Task override:
-
-```text
-/l <link> -ar custom [S{season}E{episode}] {name} {resolution} {DS4K} {codec}
-```
-
-Common variables:
-
-```text
-{file_name} {file_size} {file_caption} {languages} {subtitles} {duration}
-{ott} {resolution} {name} {title} {year} {quality} {DS4K}
-{season} {episode} {audio} {lib} {extension} {shortsub} {shortlang}
-{part} {raw_name} {link} {vcodec} {codec} {acodec}
-{audio_codec} {audio_channels} {audio_bitrate}
-{hdr} {dynamic_range} {release_group} {group}
-```
-
-Notes:
-
-- `{DS4K}` is separate.
-- `{resolution}` stays only values like `2160p`, `1080p`, `720p`.
-- `{quality}` stays values like `WEB-DL`, `WEBRip`, `BluRay`.
-- Missing variables render blank instead of leaving raw placeholders.
-
-## Auto Thumbnail
-
-Thumbnail provider flow:
-
-```text
-TMDb -> AniList -> MyAnimeList -> local FFmpeg frame
-```
-
-Custom user thumbnails always win. Provider thumbnails are saved from HD sources. Document thumbnails are generated from the HD source only when Telegram needs a smaller document thumb.
-
-If a thumbnail looks wrong, check:
-
-- `TMDB_ACCESS_TOKEN`
-- title cleanup in logs: `Poster search title`
-- AniList/MAL availability
-- whether local FFmpeg fallback was used
-
-## Intro Subtitles
-
-Intro subtitles are generated as ASS subtitles and muxed into the video, not burned into the pixels.
-
-Useful config:
-
-```python
-INTRO_SUBTITLE_TEXT = ""
-INTRO_SUBTITLE_RANGES = "00:00:00 - 00:00:05 (5s)"
-INTRO_SUBTITLE_FADE_MS = 400
-INTRO_SUBTITLE_FONT = "Arial"
-INTRO_SUBTITLE_FONT_SIZE = 36
-INTRO_SUBTITLE_COLOR = "&H00FFFFFF"
-INTRO_SUBTITLE_OUTLINE_COLOR = "&H00000000"
-INTRO_SUBTITLE_COLOR_PALETTE = ""
-```
-
-`INTRO_SUBTITLE_COLOR_PALETTE` can cycle letter colors when set, for example:
-
-```python
-INTRO_SUBTITLE_COLOR_PALETTE = "#ff4aa2,#4ad8ff,#fff176"
-```
-
-## Batch Leech
-
-`/bleech` leeches many links with controlled download/upload limits:
-
-```text
-/bleech link1 link2 link3
-```
-
-Config:
-
-```python
-BLEECH_MAX_ACTIVE_DOWNLOADS = 1
-BLEECH_MAX_ACTIVE_UPLOADS = 2
-BLEECH_LINK_SIZE_LIMIT_GB = 0
-```
-
-`/bqleech`, `/bql`, and `/bqbleech` handle very large qB torrents by selecting ordered batches:
-
-```text
-/bqleech <magnet-or-torrent>
-```
-
-Config:
-
-```python
-BQLEECH_BATCH_SIZE_GB = 30
-BQLEECH_MAX_ACTIVE_DOWNLOADS = 1
-BQLEECH_MAX_ACTIVE_UPLOADS = 1
-```
-
-## Create Torrent
-
-`/ctorrent` creates a release pack:
-
-```text
-/ctorrent <link>
-/ctorrent 'Folder Name' - <link1> <link2> <link3>
-```
-
-Single-file mode can send:
-
-- HD thumbnail JPEG
-- 5x3 contact sheet with file info
-- `description.txt` BBCode template
-- `.torrent`
-
-Folder mode stores files under:
-
-```text
-/usr/src/app/torrents/seeding/Folder Name
-```
-
-Contact sheets are saved under:
-
-```text
-/usr/src/app/torrents/seeding/Folder Name/Screenshots
-```
-
-## StarFallX Upload Engine
-
-The upload engine is designed for stable multi-file uploads, not magic one-file speed.
-
-Rules:
-
-- One helper bot token runs one active upload at a time.
-- Normal users use their own helper token list.
-- Owner/sudo tasks may use the approved helper pool when configured.
-- If helper tokens are busy/cooling, files queue or fall back according to config.
-- 2GB+ uploads need premium user-session support or normal split behavior.
-- Helper bots should be added to `LEECH_DUMP_CHAT` for sequential dump/copy support.
-
-Important config:
-
-```python
-UPLOAD_ENGINE = "StarFallX"
-UPLOAD_ENGINE_VERSION = "1.2"
-USER_BOT_TOKEN_UPLOAD = True
-HELPER_TOKEN_BACKUP_LIMIT = 5
-GLOBAL_UPLOAD_BOT_ENABLED = True
-MAIN_BOT_FALLBACK_UPLOADS = 1
-UPLOAD_SAFE_CPU_GUARD = True
-UPLOAD_BOT_COOLDOWN_SECONDS = 300
-```
-
-## Settings Backup
-
-User Settings has zip export/import support. It imports safe user settings only.
-
-Protected values are skipped:
-
-- helper raw tokens
-- PIN hashes
-- session strings
-- cookies
-- passwords
-- raw API keys
-- masked token values
-
-Users must re-add helper tokens manually after importing a backup.
-
-## Restart Recovery
-
-This build supports restart recovery for batch controllers:
-
-```python
-BATCH_TASK_RESTART_RESUME = True
-```
-
-Supported:
-
-- `/bleech`: resumes from the next pending link.
-- `/bqleech` / `/bqbleech`: reloads the saved source and re-plans from the next pending batch when possible.
-
-Not fully supported:
-
-- ordinary single `/leech` and `/mirror` tasks do not safely auto-restart after reboot yet.
-
-Reason: normal tasks need a deeper command/upload-state journal to avoid duplicated Telegram posts or restarting half-finished uploads. Existing incomplete-task notifier can report links after restart, but it is not the same as safe automatic replay.
-
-## CPU And Performance
-
-Safe defaults are better than unlimited speed.
-
-Important knobs:
-
-```python
-PERFORMANCE_PROFILE = "auto"
-FFMPEG_THREADS = 0
-FFMPEG_CPU_CORES = ""
-FFMPEG_QUEUE_ENABLED = True
-FFMPEG_QUEUE_LOGS = True
-SAFE_CPU_PERCENT = 92
-SAFE_FREE_RAM_MB = 512
-MAX_PARALLEL_TASKS = 4
-TG_COPY_DELAY = 0.15
-```
-
-FFmpeg queue means one FFmpeg operation runs at a time by default. This protects small VPS machines from crashes while upload/download tasks continue normally.
-
-For low-CPU VPS:
-
-```python
-PERFORMANCE_PROFILE = "safe"
-FFMPEG_THREADS = 2
-MAX_PARALLEL_TASKS = 2
-```
-
-For stronger VPS:
-
-```python
-PERFORMANCE_PROFILE = "max_speed"
-FFMPEG_THREADS = 0
-MAX_PARALLEL_TASKS = 4
-```
-
-Always check `/status`, CPU, RAM, and free disk while testing.
-
-## Testing And Support
-
-Testing group:
-
-```text
-@Anime_Starfall
-```
-
-Use Linux logs when reporting bugs. ARM and Heroku container support exists, but if it fails, collect logs and ask AI/devs to adjust the Docker/package layer.
-
-Useful commands:
-
-```bash
-docker compose logs -f
-docker compose ps
-docker compose build --no-cache
-python -m compileall bot
-```
-
-## Known Limits
-
-- Normal single-task restart replay is not fully safe yet.
-- Multiple bot tokens improve parallel multi-file uploads, not one-file upload speed.
-- Telegram FloodWait still applies to all bot/user sessions.
-- Some Video + Video merges require compatible codecs/timebases; incompatible files should be remuxed manually or processed later.
-- Heroku and ARM support are available in files but not fully tested by this release.
-- Auto thumbnail depends on metadata provider availability and title cleanup.
+   ```bash
+   git clone https://github.com/SilentDemonSD/WZML-X.git
+   cd WZML-X
+   cp config_sample.py config.py
+   docker build -t wzmlx .
+   docker run --rm -p 8080:8080 \
+      -v "$PWD/config.py:/usr/src/app/config.py:ro" \
+      -v "$PWD/downloads:/usr/src/app/downloads" \
+      -v "$PWD/logs:/usr/src/app/logs" \
+      wzmlx
+   ```
+</details>
+
+<details>
+   <summary>Deployment Notes</summary>
+
+   1. If you use qBittorrent, tune `AsyncIOThreadsCount` to your machine size.
+   2. Stop the container before removing it, and remove the container before pruning images.
+   3. Useful cleanup commands:
+
+   ```bash
+   docker container prune
+   docker image prune -a
+   ```
+</details>
+
+<details>
+   <summary>Legacy Workflow Guide</summary>
+
+   Some users still rely on the external workflow path referenced by the previous README:
+
+   - [WZ Deploy workflow guide](https://github.com/SilentDemonSD/WZ-Deploy/tree/main?tab=readme-ov-file#2%EF%B8%8F%E2%83%A3-method-2-github-workflow-guide)
+
+   Keep this only if that workflow still matches your deployment style.
+</details>
+
+## Configuration
+
+Start with the required values:
+
+- `BOT_TOKEN`
+- `TELEGRAM_API`
+- `TELEGRAM_HASH`
+- `OWNER_ID`
+- `DATABASE_URL`
+
+Then tune the optional behavior from `config_sample.py`.
+
+<details>
+   <summary>Important user-facing settings</summary>
+
+   | Setting | User impact |
+   |---|---|
+   | `DEFAULT_LANG` | Bot language |
+   | `STATUS_LIMIT` | How much status data is shown |
+   | `DEFAULT_UPLOAD` | Default upload target |
+   | `LEECH_SPLIT_SIZE` | How large leech outputs are split |
+   | `QUEUE_ALL`, `QUEUE_DOWNLOAD`, `QUEUE_UPLOAD` | Queue pressure and concurrency |
+   | `SHOW_CLOUD_LINK` | Whether cloud links are shown to users |
+   | `WEB_PINCODE` | Protects web access to file selection |
+</details>
+
+<details>
+   <summary>Integrations available in config</summary>
+
+   The sample config also covers:
+
+   - qBittorrent and Aria2-related controls
+   - JDownloader login details
+   - Mega credentials
+   - SABnzbd server definitions
+   - Google Drive settings
+   - RSS, search, media metadata, and logging controls
+</details>
+
+## Project Layout
+
+| Path | Purpose |
+|---|---|
+| `bot/` | Bot core, handlers, listeners, and modules |
+| `web/` | FastAPI app, templates, and the file selector UI |
+| `gen_scripts/` | Setup helpers for sessions, tokens, and drive configuration |
+| `plugins/` | Optional bot plugins |
+| `configs/qbittorrent/` | Default qBittorrent configuration |
+| `configs/sabnzbd/` | Default SABnzbd configuration |
+
+## Documentation
+
+> [!NOTE]
+> This documentation is still being expanded.
+
+- Full guides: `docs/`
+- Fresh VPS Docker guide: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
+- Audit changelog: [`docs/AUDIT_CHANGELOG.md`](docs/AUDIT_CHANGELOG.md)
+- Deployment notes: the docs site linked from the repository at WZ Docs
+- Configuration reference: `config_sample.py`
+
+## Support
+
+<details>
+   <summary>Join Community</summary>
+
+   - Telegram channel: https://t.me/WZML_X
+   - Support group: https://t.me/WZML_Support
+</details>
 
 ## Credits
 
-Special thanks to aquib for WZML-X work and for accepting community feature ideas.
+WZML-X is a fork of [mirror-leech-telegram-bot](https://github.com/anasty17/mirror-leech-telegram-bot). The base project belongs to [anasty17](https://github.com/anasty17) and upstream contributors.
 
-WZML-X is based on the mirror-leech ecosystem and the work of many upstream contributors, including the original mirror-leech-telegram-bot project.
+<details>
+   <summary>Bot Authors</summary>
 
-This StarFallX branch is a community feature/dropout project. Take what helps, improve it, and keep the logs clean.
+   <table>
+      <thead>
+         <tr>
+            <th>Avatar</th>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Profile</th>
+         </tr>
+      </thead>
+      <tbody>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/105407900?v=4" width="72" alt="SilentDemonSD"></td>
+            <td>SilentDemonSD</td>
+            <td>Author, UI design, and custom features</td>
+            <td><a href="https://github.com/SilentDemonSD">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/93116400?v=4" width="72" alt="RjRiajul"></td>
+            <td>RjRiajul</td>
+            <td>Co-author and maintainer</td>
+            <td><a href="https://github.com/rjriajul">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/113664541?v=4" width="72" alt="CodeWithWeeb"></td>
+            <td>CodeWithWeeb</td>
+            <td>Feature expansion and wrap-up improvements</td>
+            <td><a href="https://github.com/weebzone">GitHub</a></td>
+         </tr>
+         <tr>
+            <td><img src="https://avatars.githubusercontent.com/u/84721324?v=4" width="72" alt="Maverick"></td>
+            <td>Maverick</td>
+            <td>Co-author and bug testing</td>
+            <td><a href="https://github.com/MajnuRangeela">GitHub</a></td>
+         </tr>
+      </tbody>
+   </table>
+</details>
+
+## License
+
+This project is distributed under the terms of the repository license. See [LICENSE](LICENSE) for the full text.
+

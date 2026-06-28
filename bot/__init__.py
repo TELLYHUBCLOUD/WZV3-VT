@@ -1,17 +1,16 @@
 # ruff: noqa: E402
+try:
+    from uvloop import install
 
-from uvloop import install
-
-install()
+    install()
+except ImportError:
+    pass
 
 from asyncio import new_event_loop, set_event_loop
 
 bot_loop = new_event_loop()
 set_event_loop(bot_loop)
 
-from shutil import which
-from subprocess import run as srun
-from os import getcwd
 from asyncio import Lock
 from logging import (
     ERROR,
@@ -27,13 +26,12 @@ from time import time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .core.config_manager import BinConfig
+from .core.config_manager import Config
 from sabnzbdapi import SabnzbdClient
 
 getLogger("requests").setLevel(WARNING)
 getLogger("urllib3").setLevel(WARNING)
 getLogger("pyrogram").setLevel(ERROR)
-getLogger("aiohttp").setLevel(ERROR)
 getLogger("apscheduler").setLevel(ERROR)
 getLogger("httpx").setLevel(WARNING)
 getLogger("pymongo").setLevel(WARNING)
@@ -41,9 +39,6 @@ getLogger("aiohttp").setLevel(WARNING)
 
 
 bot_start_time = time()
-
-bot_loop = new_event_loop()
-set_event_loop(bot_loop)
 
 basicConfig(
     format="[%(asctime)s] [%(levelname)s] - %(message)s",  #  [%(filename)s:%(lineno)d]
@@ -53,39 +48,15 @@ basicConfig(
 )
 
 LOGGER = getLogger(__name__)
-cpu_no = cpu_count()
+cpu_no = cpu_count() or 1
 threads = max(1, cpu_no // 2)
-cores = ",".join(str(i) for i in range(threads))
+cores = ",".join(str(i) for i in range(1, threads + 1))
 
-
-def start_qbittorrent():
-    qbit_name = BinConfig.QBIT_NAME
-    qbit_path = which(qbit_name)
-
-    if not qbit_path and qbit_name != "qbittorrent-nox":
-        LOGGER.warning(
-            f"qBittorrent binary '{qbit_name}' was not found. "
-            "Trying fallback 'qbittorrent-nox'."
-        )
-        qbit_name = "qbittorrent-nox"
-        qbit_path = which(qbit_name)
-
-    if not qbit_path:
-        LOGGER.error(
-            f"qBittorrent binary '{BinConfig.QBIT_NAME}' was not found and "
-            "fallback 'qbittorrent-nox' is unavailable. qB leeching requires "
-            "qBittorrent; install qbittorrent-nox or fix BinConfig.QBIT_NAME."
-        )
-        raise SystemExit(1)
-
-    LOGGER.info(f"Starting qBittorrent with binary: {qbit_name} ({qbit_path})")
-    result = srun([qbit_path, "-d", f"--profile={getcwd()}"], check=False)
-    if result.returncode:
-        LOGGER.error(
-            f"qBittorrent failed to start with exit code {result.returncode}. "
-            "qB leeching requires qBittorrent."
-        )
-        raise SystemExit(result.returncode)
+if cpu_no <= 1 or cpu_no == 2:
+    service_cores = ""
+else:
+    service_start = threads + 1
+    service_cores = ",".join(str(i) for i in range(service_start, cpu_no + 1))
 
 bot_cache = {}
 DOWNLOAD_DIR = "/usr/src/app/downloads/"
@@ -103,6 +74,8 @@ status_dict = {}
 task_dict = {}
 rss_dict = {}
 shortener_dict = {}
+categories_dict = {}
+list_drives_dict = {}
 var_list = [
     "BOT_TOKEN",
     "TELEGRAM_API",
@@ -112,104 +85,6 @@ var_list = [
     "BASE_URL",
     "UPSTREAM_REPO",
     "UPSTREAM_BRANCH",
-    "UPDATE_PKGS",
-    "AUTO_THUMBNAIL",
-    "AUTO_THUMBNAIL_QUALITY",
-    "TMDB_ACCESS_TOKEN",
-    "AUTORENAME",
-    "RENAME_METHOD",
-    "LEECH_FILENAME_REMNAME_AUTO",
-    "LEECH_FILENAME_REMNAME_REGEX",
-    "SUBTITLE_TRANSLATE_TARGET",
-    "INTRO_SUBTITLE_TEXT",
-    "UPLOAD_ENGINE",
-    "UPLOAD_ENGINE_VERSION",
-    "USER_BOT_TOKEN_UPLOAD",
-    "USER_BOT_TOKEN_MAX_ACTIVE",
-    "HELPER_TOKEN_PIN_REQUIRED",
-    "HELPER_TOKEN_BACKUP_LIMIT",
-    "HELPER_TOKEN_OWNER_CAN_USE_APPROVED",
-    "HELPER_TOKEN_NORMAL_USERS_GLOBAL_FALLBACK",
-    "GLOBAL_UPLOAD_BOT_TOKENS",
-    "GLOBAL_UPLOAD_BOT_ENABLED",
-    "GLOBAL_UPLOAD_BOT_MAX_ACTIVE",
-    "MAIN_BOT_FALLBACK_UPLOADS",
-    "UPLOAD_QUEUE_ENABLED",
-    "UPLOAD_MAX_ACTIVE_TOTAL",
-    "UPLOAD_SAFE_CPU_GUARD",
-    "UPLOAD_BOT_TOKEN_BLACKLIST",
-    "UPLOAD_BOT_COOLDOWN_SECONDS",
-    "UPLOAD_PRIVATE_DUMP_ONLY_KEYWORDS",
-    "UPLOAD_PRIVATE_DUMP_ONLY_DOMAINS",
-    "OWNER_SESSION_STRINGS",
-    "OWNER_HELPER_BOT_TOKENS",
-    "PERFORMANCE_PROFILE",
-    "FFMPEG_THREADS",
-    "FFMPEG_CPU_CORES",
-    "TG_COPY_DELAY",
-    "TG_FLOOD_WAIT_MULTIPLIER",
-    "MAX_PARALLEL_TASKS",
-    "SAFE_CPU_PERCENT",
-    "SAFE_FREE_RAM_MB",
-    "ARIA2_MAX_CONNECTION_PER_SERVER",
-    "ARIA2_SPLIT",
-    "ARIA2_MIN_SPLIT_SIZE",
-    "ARIA2_MAX_CONCURRENT_DOWNLOADS",
-    "ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT",
-    "ARIA2_MAX_OVERALL_UPLOAD_LIMIT",
-    "QBIT_UPLOAD_LIMIT",
-    "STATUS_THEME",
-    "CTORRENT_STORAGE_DIR",
-    "CTORRENT_OUTPUT_DIR",
-    "CTORRENT_TRACKERS",
-    "CTORRENT_PRIVATE",
-    "CTORRENT_KEEP_SOURCE",
-    "CTORRENT_AUTO_ADD_QBIT",
-    "CTORRENT_BBCODE_TEMPLATE",
-    "CTORRENT_BBCODE_TEMPLATE_PATH",
-    "LIBRE_TRANSLATE_API_URL",
-    "LIBRE_TRANSLATE_API_KEY",
-    "MYANIMELIST_CLIENT_ID",
-    "MYANIMELIST_CLIENT_NAME",
-    "FFMPEG_QUEUE_ENABLED",
-    "FFMPEG_QUEUE_LOGS",
-    "VT_MERGE_TRACK_TIMEOUT",
-    "VIDEO_TOOLS_REPLY_TIMEOUT",
-    "VIDEO_TOOLS_LOGS",
-    "AUTO_PROCESS_MESSAGE_MODE",
-    "AUTO_PROCESS_LOGS",
-    "AUTO_VT",
-    "AUTO_ORDER",
-    "AUTO_AUDIO_ORDER",
-    "AUTO_SUBTITLE_ORDER",
-    "BATCH_TASK_RESTART_RESUME",
-    "BLEECH_MAX_ACTIVE_DOWNLOADS",
-    "BLEECH_MAX_ACTIVE_UPLOADS",
-    "BLEECH_LINK_SIZE_LIMIT_GB",
-    "BQLEECH_BATCH_SIZE_GB",
-    "BQLEECH_MAX_ACTIVE_DOWNLOADS",
-    "BQLEECH_MAX_ACTIVE_UPLOADS",
-    "SUBTITLE_TRANSLATE_PROVIDER",
-    "AUTO_PROCESS",
-    "AUTO_LEECH",
-    "AUTO_UNZIP",
-    "AUTO_REMOVE_STREAMS",
-    "AUTO_KEEP_AUDIO_LANGS",
-    "AUTO_KEEP_SUBTITLE_LANGS",
-    "AUTO_MERGE",
-    "AUTO_MERGE_FILENAME",
-    "AUTO_MERGE_SAFETY_MB",
-    "AUTO_INTRO_SUBTITLE",
-    "AUTO_METADATA",
-    "AUTO_RENAME",
-    "INTRO_SUBTITLE_DURATION",
-    "INTRO_SUBTITLE_RANGES",
-    "INTRO_SUBTITLE_FADE_MS",
-    "INTRO_SUBTITLE_FONT",
-    "INTRO_SUBTITLE_FONT_SIZE",
-    "INTRO_SUBTITLE_COLOR",
-    "INTRO_SUBTITLE_OUTLINE_COLOR",
-    "INTRO_SUBTITLE_COLOR_PALETTE",
 ]
 auth_chats = {}
 excluded_extensions = ["aria2", "!qB"]
@@ -225,14 +100,52 @@ queue_dict_lock = Lock()
 qb_listener_lock = Lock()
 nzb_listener_lock = Lock()
 jd_listener_lock = Lock()
-cpu_eater_lock = Lock()
 same_directory_lock = Lock()
+
+
+def _sabnzbd_key():
+    from bot.helper.ext_utils.bot_utils import derive_service_password
+
+    return derive_service_password(
+        (Config.BOT_TOKEN or "").split(":", 1)[0] or "0",
+        "sabnzbd",
+    )
+
+
+def _update_sabnzbd_ini(api_key):
+    from re import compile as _re, MULTILINE
+
+    pat_key = _re(r"^api_key\s*=.*$", MULTILINE)
+    pat_pwd = _re(r"^password\s*=.*$", MULTILINE)
+    try:
+        with open("configs/sabnzbd/SABnzbd.ini", "r+") as f:
+            content = f.read()
+            new = content
+            new = pat_key.sub(f"api_key = {api_key}", new)
+            new = pat_pwd.sub(f"password = {api_key}", new)
+            if new == content:
+                return
+            f.seek(0)
+            f.truncate()
+            f.write(new)
+            LOGGER.info("SABnzbd.ini Updated with derived api_key")
+    except FileNotFoundError:
+        LOGGER.warning("SABnzbd.ini not found, skipping patch")
+    except Exception as e:
+        LOGGER.error(f"SABnzbd.ini patch failed: {e}")
+
+
+if not Config.WEB_ACCESS_PASSWORD:
+    from secrets import token_hex
+
+    Config.WEB_ACCESS_PASSWORD = token_hex(32)
+
+_sabnzbd_api_key = _sabnzbd_key()
 
 sabnzbd_client = SabnzbdClient(
     host="http://localhost",
-    api_key="admin",
+    api_key=_sabnzbd_api_key,
     port="8070",
 )
-start_qbittorrent()
 
 scheduler = AsyncIOScheduler(event_loop=bot_loop)

@@ -12,6 +12,9 @@ from ..helper.telegram_helper.message_utils import edit_message, send_message
 
 @new_task
 async def hydra_search(_, message):
+    if Config.DISABLE_NZB:
+        await send_message(message, "SABnzbd is currently disabled by the Bot Owner.")
+        return
     key = message.text.split()
     if len(key) == 1:
         await send_message(
@@ -44,7 +47,7 @@ async def hydra_search(_, message):
 
 
 async def search_nzbhydra(query, limit=50):
-    search_url = f"{Config.HYDRA_IP}/api"
+    search_url = f"{Config.HYDRA_IP.rstrip('/')}/api"
     params = {
         "apikey": Config.HYDRA_API_KEY,
         "t": "search",
@@ -108,10 +111,19 @@ async def create_telegraph_page(query, items):
         )
         size = get_readable_file_size(size_bytes)
 
+        nzb_id = "Unknown"
+        if "getnzb/api/" in download_url:
+            try:
+                nzb_id = download_url.split("getnzb/api/")[1].split("?")[0]
+            except Exception:
+                pass
+
         content += (
             f"{idx}. {title}<br>"
-            f"<b><a href='{download_url}'>Download URL</a> | <a href='http://t.me/share/url?url={download_url}'>Share Download URL</a></b><br>"
+            f"<b>NZB ID:</b> <code>{nzb_id}</code><br>"
             f"<b>Size:</b> {size}<br>"
+            f"<b>Mirror:</b> <code>/nm {nzb_id}</code><br>"
+            f"<b>Leech:</b> <code>/nl {nzb_id}</code><br>"
             f"━━━━━━━━━━━━━━━━━━━━━━<br><br>"
         )
 

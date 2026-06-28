@@ -25,6 +25,129 @@ from .files_utils import get_mime_type, is_archive, is_archive_split
 from .status_utils import time_to_seconds
 
 
+TITLE_NOISE_PATTERN = (
+    r"\b(?:"
+    r"19\d{2}|20[0-3]\d|2160p|1080p|720p|480p|4K|DS4K|"
+    r"WEB\s?DL|WEB\s?Rip|WEBRIP|Blu\s?Ray|BRRip|BDRip|HDRip|HDTV|DVDRip|REMUX|"
+    r"DSNP|AMZN|NF|JHS|Hotstar|HBO|IMAX|CR|MULTI\d*|MULTi\d*|Dual|"
+    r"EAC3|E\s?AC3|DDP|AC3|AAC|DTS|TrueHD|Atmos|Opus|FLAC|MP3|"
+    r"HEVC|H265|H264|x265|x264|AV1|10bit|8bit|12bit|"
+    r"Tamil|Telugu|Hindi|English|Malayalam|Kannada|ESub|MSub|Sub"
+    r")\b"
+)
+
+
+def _apply_title_regex(title, pattern_str):
+    if not pattern_str:
+        return title
+    result = title
+    for part in pattern_str.strip().split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        pattern, replacement = part.split(":", 1) if ":" in part else (part, "")
+        try:
+            result = re.sub(pattern, replacement, result)
+        except re.error:
+            continue
+    return result.strip() or title
+
+
+def _final_clean_title(title):
+    title = re.sub(r"[\[\](){}]", "", title)
+    title = re.sub(r"\s+", " ", title)
+    return title.strip(" -._")
+
+
+def format_clean_poster_title(raw_title, rename_regex=None):
+    """Clean a release filename for poster/contact-sheet metadata lookup."""
+    from urllib.parse import unquote
+
+    raw_title = unquote(str(raw_title or ""))
+    raw_title = _apply_title_regex(raw_title, rename_regex)
+
+    normalized = re.sub(r"https?://\S+", " ", raw_title)
+    normalized = re.sub(
+        r"\bt(?:elegram)?\.me/\S+",
+        " ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\bwww\S*", " ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"\b(www\.)?\w+\.(com|net|org|xyz|me|in|to|co|cc|info|tv|link|app|online|site|club|work|icu|top|vip|pro)\b",
+        " ",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(r"\.\w{2,4}$", "", normalized)
+    normalized = re.sub(r"[\[\](){}]", " ", normalized)
+    normalized = normalized.replace("_", " ").replace(".", " ").replace("-", " ")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    season = None
+    year = None
+    season_match = re.search(
+        r"(?<![A-Za-z0-9])(?:Season\s*|S)0*(\d{1,2})(?:\s*E\d{1,4})?(?![A-Za-z0-9])",
+        normalized,
+        re.IGNORECASE,
+    )
+    if season_match:
+        season = f"Season {int(season_match.group(1))}"
+        normalized = (
+            normalized[: season_match.start()]
+            if season_match.start() > 1
+            else normalized[season_match.end() :]
+        )
+    if year_match := re.search(r"\b(19\d{2}|20[0-3]\d)\b", normalized):
+        year = year_match.group(1)
+        normalized = re.sub(rf"\b{re.escape(year)}\b", " ", normalized)
+
+    title = re.sub(TITLE_NOISE_PATTERN, " ", normalized, flags=re.IGNORECASE)
+    title = _final_clean_title(title)
+    return title, season, year
+
+
+async def get_release_description(title):
+    """Fetch an anime description for torrent BBCode, returning empty on failure."""
+    query = """
+    query ($search: String!) {
+      Page(page: 1, perPage: 1) {
+        media(search: $search, type: ANIME) {
+          description(asHtml: false)
+        }
+      }
+    }
+    """
+    title = _final_clean_title(str(title or ""))
+    if not title:
+        return ""
+    try:
+        from httpx import AsyncClient
+
+        async with AsyncClient(timeout=12) as client:
+            response = await client.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": title}},
+            )
+        if response.status_code != 200:
+            LOGGER.warning(
+                f"AniList description lookup failed with status {response.status_code}"
+            )
+            return ""
+        media = (
+            response.json()
+            .get("data", {})
+            .get("Page", {})
+            .get("media", [])
+        )
+        description = (media[0] or {}).get("description") if media else ""
+        return re.sub(r"<[^>]+>", "", description or "").strip()
+    except Exception as e:
+        LOGGER.warning(f"Release description lookup failed for '{title}': {e}")
+        return ""
+
+
 def get_md5_hash(up_path):
     md5_hash = md5()
     with open(up_path, "rb") as f:

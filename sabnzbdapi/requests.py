@@ -1,7 +1,7 @@
 from json import JSONDecodeError
 from functools import wraps
 
-from httpx import AsyncClient, AsyncHTTPTransport, Timeout
+from httpx import AsyncClient, AsyncHTTPTransport, RequestError, Timeout
 from urllib3 import disable_warnings
 from urllib3.exceptions import InsecureRequestWarning
 
@@ -63,6 +63,8 @@ class SabnzbdClient(JobFunctions):
     ):
         if requests_args is None:
             requests_args = {}
+        if params is None:
+            params = {}
         session = self._session()
         params |= kwargs
         requests_kwargs = {**self._HTTPX_REQUETS_ARGS, **requests_args}
@@ -85,8 +87,17 @@ class SabnzbdClient(JobFunctions):
             except APIConnectionError as err:
                 if retry_count >= (retries - 1):
                     raise err
+            except RequestError as err:
+                if retry_count >= (retries - 1):
+                    raise APIConnectionError(
+                        f"Failed to connect to SABnzbd API at {self._base_url} "
+                        f"after {retries} attempts: {err}"
+                    ) from err
         if response is None:
-            raise APIConnectionError("Failed to connect to API!")
+            raise APIConnectionError(
+                f"Failed to connect to SABnzbd API at {self._base_url} "
+                f"after {retries} attempts."
+            )
         return response
 
     async def close(self):

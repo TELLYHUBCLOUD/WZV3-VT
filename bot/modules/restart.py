@@ -1,4 +1,4 @@
-from asyncio import create_subprocess_exec, gather, get_event_loop, sleep
+from asyncio import create_subprocess_exec, create_task, gather, sleep
 from datetime import datetime
 from os import execl as osexecl
 from sys import executable
@@ -272,7 +272,7 @@ async def confirm_restart(_, query):
         except Exception:
             pass
 
-        get_event_loop().create_task(_background_cleanup())
+        create_task(_background_cleanup())
 
         osexecl(executable, executable, "-m", "bot")
     else:

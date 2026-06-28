@@ -1,6 +1,7 @@
 from asyncio import create_subprocess_exec, gather, sleep
 from importlib import import_module
 from os import environ, path as ospath, getenv
+from sys import executable
 
 from aiofiles import open as aiopen
 from aiofiles.os import makedirs, remove, path as aiopath
@@ -38,6 +39,38 @@ def _qbit_password():
         (Config.BOT_TOKEN or "").split(":", 1)[0] or "0",
         "qbit",
     )
+
+
+async def _start_background_process(component, cmd, *, env=None, must_keep_running=True):
+    proc = await create_subprocess_exec(*cmd, env=env)
+    await sleep(1)
+    if proc.returncode is None:
+        LOGGER.info(
+            f"{component} started successfully. command={' '.join(cmd)!r} pid={proc.pid}"
+        )
+        return proc
+
+    msg = (
+        f"{component} exited during startup. command={' '.join(cmd)!r} "
+        f"exit_code={proc.returncode}. "
+    )
+    if must_keep_running:
+        LOGGER.error(
+            msg
+            + "Suggested fix: check the command output above, verify the port is free, "
+            "and rebuild the image if dependencies changed."
+        )
+        raise RuntimeError(msg)
+
+    if proc.returncode == 0:
+        LOGGER.info(f"{component} exited normally during startup. command={' '.join(cmd)!r}")
+    else:
+        LOGGER.warning(
+            msg
+            + "Continuing because this helper is optional. Suggested fix: check "
+            "BASE_URL/PORT configuration if keepalive pings are expected."
+        )
+    return proc
 
 
 async def update_qb_options():
@@ -445,18 +478,25 @@ async def load_configurations():
             access_pwd = token_bytes(32).hex()
             Config.WEB_ACCESS_PASSWORD = access_pwd
         web_env = {**environ, "WEB_ACCESS_PASSWORD": access_pwd}
-        await create_subprocess_exec(
-            "gunicorn",
-            "-k",
-            "uvicorn.workers.UvicornWorker",
-            "-w",
-            "1",
-            "web.wserver:app",
-            "--bind",
-            f"0.0.0.0:{PORT}",
+        await _start_background_process(
+            "web-server",
+            [
+                "gunicorn",
+                "-k",
+                "uvicorn.workers.UvicornWorker",
+                "-w",
+                "1",
+                "web.wserver:app",
+                "--bind",
+                f"0.0.0.0:{PORT}",
+            ],
             env=web_env,
         )
-        await create_subprocess_exec("python", "cron_boot.py")
+        await _start_background_process(
+            "cron-keepalive",
+            [executable, "cron_boot.py"],
+            must_keep_running=False,
+        )
 
     from ..helper.ext_utils.tunnel_monitor import apply_tunnel_url_once
 

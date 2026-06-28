@@ -3,7 +3,6 @@ from hashlib import sha256
 from importlib import import_module
 from logging import ERROR, INFO, FileHandler, StreamHandler, basicConfig, getLogger
 from os import environ, path, remove
-from subprocess import call as scall
 from subprocess import run as srun
 from sys import exit
 
@@ -73,7 +72,15 @@ async def _fetch_db_config(database_url, db_part):
         from pymongo import AsyncMongoClient
         from pymongo.server_api import ServerApi
     except ImportError:
-        scall("uv pip install pymongo", shell=True)
+        result = srun(["uv", "pip", "install", "pymongo"])
+        if result.returncode != 0:
+            _LOGGER.error(
+                "Failed to install pymongo. component=dependency-update "
+                "command='uv pip install pymongo' "
+                f"exit_code={result.returncode}. Suggested fix: rebuild the image "
+                "or verify uv is installed in the container."
+            )
+            raise
         from pymongo import AsyncMongoClient
         from pymongo.server_api import ServerApi
     conn = AsyncMongoClient(database_url, server_api=ServerApi("1"))
@@ -137,7 +144,15 @@ def _run_update(upstream_repo, upstream_branch, version):
 
 
 def _update_packages():
-    scall("uv pip install -U -r requirements.txt", shell=True)
+    result = srun(["uv", "pip", "install", "-U", "-r", "requirements.txt"])
+    if result.returncode != 0:
+        _LOGGER.error(
+            "Failed to update Python packages. component=dependency-update "
+            "command='uv pip install -U -r requirements.txt' "
+            f"exit_code={result.returncode}. Suggested fix: verify requirements.txt "
+            "and rebuild the Docker image."
+        )
+        exit(result.returncode)
     _LOGGER.info("Successfully Updated all the Packages!")
 
 

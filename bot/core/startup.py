@@ -390,8 +390,20 @@ async def load_configurations():
     if not Config.DISABLE_NZB:
         cmd.append(BinConfig.SABNZBD_NAME)
     proc = await create_subprocess_exec(*cmd)
-    if await proc.wait() != 0:
-        raise RuntimeError("Service bootstrap failed. Check logs above for the missing binary or daemon that did not become ready.")
+    return_code = await proc.wait()
+    if return_code != 0:
+        cmd_display = " ".join(cmd)
+        LOGGER.error(
+            "Service bootstrap failed: component=download-services "
+            f"command={cmd_display!r} exit_code={return_code}. "
+            "Check the preceding [services] log line for the exact daemon or "
+            "readiness check that failed. Common fixes: verify SABnzbd config "
+            "when NZB is enabled, ensure ports 6800/8070 are free, and rebuild "
+            "the image after Dockerfile changes."
+        )
+        raise RuntimeError(
+            f"download-services bootstrap failed with exit code {return_code}: {cmd_display}"
+        )
 
     if await aiopath.exists("cfg.zip"):
         if await aiopath.exists("/JDownloader/cfg"):

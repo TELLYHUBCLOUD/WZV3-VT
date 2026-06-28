@@ -3,7 +3,6 @@ from asyncio import (
     Lock,
     Queue,
     QueueFull,
-    QueueShutDown,
     Semaphore,
     create_task,
     gather,
@@ -23,6 +22,14 @@ from ... import LOGGER
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 from .bot_utils import sync_to_async
 
+try:
+    from asyncio import QueueShutDown
+except ImportError:
+    class QueueShutDown(Exception):
+        pass
+
+
+_QUEUE_STOP = object()
 _ul_load_lock = Lock()
 _ul_slots = [None]
 _ul_slots_lock = Lock()
@@ -30,6 +37,23 @@ _ul_slots_lock = Lock()
 
 KB = 1024
 PART_SIZE = 512 * KB
+
+
+async def _shutdown_queue(q, worker_count, immediate=False):
+    if hasattr(q, "shutdown"):
+        q.shutdown(immediate=immediate)
+        return
+
+    if immediate:
+        q._queue.clear()  # noqa: SLF001 - compatibility fallback for Python 3.12
+
+    for _ in range(worker_count):
+        while True:
+            try:
+                q.put_nowait(_QUEUE_STOP)
+                break
+            except QueueFull:
+                await sleep(0)
 
 
 class HypertgUpload(HypertgTransfer):
@@ -134,6 +158,8 @@ class HypertgUpload(HypertgTransfer):
                             data = await q.get()
                         except QueueShutDown:
                             return
+                        if data is _QUEUE_STOP:
+                            return
                         for attempt in range(5):
                             try:
                                 await s.invoke(data)
@@ -218,7 +244,7 @@ class HypertgUpload(HypertgTransfer):
             if acc:
                 self._obj._processed_bytes += acc
 
-            q.shutdown()
+            await _shutdown_queue(q, n_workers)
             await gather(*workers)
 
             if is_big:
@@ -247,7 +273,7 @@ class HypertgUpload(HypertgTransfer):
             if _slot_acquired:
                 _ul_slots[0].release()
             if q:
-                q.shutdown(immediate=True)
+                await _shutdown_queue(q, n_workers, immediate=True)
             if workers:
                 await gather(*workers, return_exceptions=True)
             if fp:

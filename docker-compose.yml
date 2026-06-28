@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    init: true
     restart: unless-stopped
     environment:
       TZ: Asia/Kolkata
@@ -33,7 +32,6 @@ services:
     build:
       context: .
       dockerfile: tunnel.Dockerfile
-    init: true
     restart: unless-stopped
     network_mode: "service:app"
     volumes:
@@ -44,7 +42,6 @@ services:
   #   build:
   #     context: .
   #     dockerfile: Dockerfile
-  #   init: true
   #   restart: unless-stopped
   #   environment:
   #     TZ: Asia/Kolkata
@@ -66,7 +63,6 @@ services:
   #   build:
   #     context: .
   #     dockerfile: tunnel.Dockerfile
-  #   init: true
   #   restart: unless-stopped
   #   network_mode: "service:app2"
   #   environment:

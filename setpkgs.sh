@@ -101,17 +101,27 @@ wait_for_aria2_rpc
 if [ -n "$SABNZBDPLUS" ]; then
     require_binary "$SABNZBDPLUS"
     require_binary cpulimit
+    sab_process_name=$(basename "$SABNZBDPLUS")
+    sab_config="configs/sabnzbd/SABnzbd.ini"
 
-    if pgrep -f "$SABNZBDPLUS" >/dev/null 2>&1; then
+    if [ ! -f "$sab_config" ]; then
+        fail "SABnzbd config '$sab_config' is missing. Restore configs/sabnzbd/SABnzbd.ini or disable NZB support."
+    fi
+
+    if pgrep -x "$sab_process_name" >/dev/null 2>&1; then
         log "Stopping previous SABnzbd process before restart."
-        pkill -f "$SABNZBDPLUS" || true
+        pkill -x "$sab_process_name" || true
     fi
 
     log "Starting SABnzbd."
     if [ -n "$SERVICE_CORES" ]; then
-        taskset -c "$SERVICE_CORES" cpulimit -l "$CPU_LIMIT" -- "$SABNZBDPLUS" -f configs/sabnzbd/SABnzbd.ini -s 0.0.0.0:8070 -b 0 -d -c -l 0 --console
+        sab_cmd=(taskset -c "$SERVICE_CORES" cpulimit -l "$CPU_LIMIT" -- "$SABNZBDPLUS" -f "$sab_config" -s 0.0.0.0:8070 -b 0 -d -c -l 0 --console)
     else
-        cpulimit -l "$CPU_LIMIT" -- "$SABNZBDPLUS" -f configs/sabnzbd/SABnzbd.ini -s 0.0.0.0:8070 -b 0 -d -c -l 0 --console
+        sab_cmd=(cpulimit -l "$CPU_LIMIT" -- "$SABNZBDPLUS" -f "$sab_config" -s 0.0.0.0:8070 -b 0 -d -c -l 0 --console)
+    fi
+    log "SABnzbd command: ${sab_cmd[*]}"
+    if ! "${sab_cmd[@]}"; then
+        fail "SABnzbd failed to launch. component=SABnzbd command='${sab_cmd[*]}' config='$sab_config'. Check the config file and port 8070."
     fi
     wait_for_tcp 127.0.0.1 8070 SABnzbd
 fi

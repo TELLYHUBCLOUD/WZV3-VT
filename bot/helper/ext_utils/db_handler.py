@@ -1,5 +1,4 @@
 from importlib import import_module
-from uuid import uuid4
 
 from aiofiles import open as aiopen
 from aiofiles.os import path as aiopath
@@ -9,23 +8,7 @@ from pymongo.server_api import ServerApi
 
 from ... import LOGGER, qbit_options, rss_dict, user_data
 from ...core.config_manager import Config
-from ...core.tg_client import TgClient, db_partition_id
-
-
-def _bot_id():
-    if TgClient.ID:
-        return str(TgClient.ID)
-    return Config.BOT_TOKEN.split(":", 1)[0]
-
-
-def _part():
-    if not TgClient.PARTITION:
-        TgClient.PARTITION = db_partition_id(_bot_id())
-    return TgClient.PARTITION
-
-
-def _new_uuid():
-    return uuid4().hex
+from ...core.tg_client import TgClient
 
 
 class DbManager:
@@ -65,36 +48,35 @@ class DbManager:
             if not key.startswith("__")
         }
         await self.db.settings.deployConfig.replace_one(
-            {"_id": _part()}, config_file, upsert=True
+            {"_id": TgClient.ID}, config_file, upsert=True
         )
 
     async def update_config(self, dict_):
         if self._return:
-            LOGGER.warning("update_config skipped: DB not connected")
             return
         await self.db.settings.config.update_one(
-            {"_id": _part()}, {"$set": dict_}, upsert=True
+            {"_id": TgClient.ID}, {"$set": dict_}, upsert=True
         )
 
     async def update_aria2(self, key, value):
         if self._return:
             return
         await self.db.settings.aria2c.update_one(
-            {"_id": _part()}, {"$set": {key: value}}, upsert=True
+            {"_id": TgClient.ID}, {"$set": {key: value}}, upsert=True
         )
 
     async def update_qbittorrent(self, key, value):
         if self._return:
             return
         await self.db.settings.qbittorrent.update_one(
-            {"_id": _part()}, {"$set": {key: value}}, upsert=True
+            {"_id": TgClient.ID}, {"$set": {key: value}}, upsert=True
         )
 
     async def save_qbit_settings(self):
         if self._return:
             return
         await self.db.settings.qbittorrent.update_one(
-            {"_id": _part()}, {"$set": qbit_options}, upsert=True
+            {"_id": TgClient.ID}, {"$set": qbit_options}, upsert=True
         )
 
     async def update_private_file(self, path):
@@ -105,22 +87,22 @@ class DbManager:
             async with aiopen(path, "rb+") as pf:
                 pf_bin = await pf.read()
             await self.db.settings.files.update_one(
-                {"_id": _part()}, {"$set": {db_path: pf_bin}}, upsert=True
+                {"_id": TgClient.ID}, {"$set": {db_path: pf_bin}}, upsert=True
             )
             if path == "config.py":
                 await self.update_deploy_config()
         else:
             await self.db.settings.files.update_one(
-                {"_id": _part()}, {"$unset": {db_path: ""}}, upsert=True
+                {"_id": TgClient.ID}, {"$unset": {db_path: ""}}, upsert=True
             )
 
     async def update_nzb_config(self):
         if self._return:
             return
-        async with aiopen("configs/sabnzbd/SABnzbd.ini", "rb+") as pf:
+        async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
             nzb_conf = await pf.read()
         await self.db.settings.nzb.replace_one(
-            {"_id": _part()}, {"SABnzbd__ini": nzb_conf}, upsert=True
+            {"_id": TgClient.ID}, {"SABnzbd__ini": nzb_conf}, upsert=True
         )
 
     async def update_user_data(self, user_id):
@@ -160,7 +142,9 @@ class DbManager:
                 }
             }
         ]
-        await self.db.users[_part()].update_one({"_id": user_id}, pipeline, upsert=True)
+        await self.db.users[TgClient.ID].update_one(
+            {"_id": user_id}, pipeline, upsert=True
+        )
 
     async def update_user_doc(self, user_id, key, path=""):
         if self._return:
@@ -168,11 +152,11 @@ class DbManager:
         if path:
             async with aiopen(path, "rb+") as doc:
                 doc_bin = await doc.read()
-            await self.db.users[_part()].update_one(
+            await self.db.users[TgClient.ID].update_one(
                 {"_id": user_id}, {"$set": {key: doc_bin}}, upsert=True
             )
         else:
-            await self.db.users[_part()].update_one(
+            await self.db.users[TgClient.ID].update_one(
                 {"_id": user_id}, {"$unset": {key: ""}}, upsert=True
             )
 
@@ -180,112 +164,72 @@ class DbManager:
         if self._return:
             return
         for user_id in list(rss_dict.keys()):
-            await self.db.rss[_part()].replace_one(
+            await self.db.rss[TgClient.ID].replace_one(
                 {"_id": user_id}, rss_dict[user_id], upsert=True
             )
 
     async def rss_update(self, user_id):
         if self._return:
             return
-        await self.db.rss[_part()].replace_one(
+        await self.db.rss[TgClient.ID].replace_one(
             {"_id": user_id}, rss_dict[user_id], upsert=True
         )
 
     async def rss_delete(self, user_id):
         if self._return:
             return
-        await self.db.rss[_part()].delete_one({"_id": user_id})
+        await self.db.rss[TgClient.ID].delete_one({"_id": user_id})
 
-    async def add_incomplete_task(
-        self, cid, link, tag, command="", user_id=0, reply_to_msg_id=0, dump_msg_id=0
-    ):
+    async def add_incomplete_task(self, cid, link, tag):
         if self._return:
             return
-        await self.db.tasks[_part()].update_one(
-            {"link": link},
-            {
-                "$setOnInsert": {
-                    "_id": _new_uuid(),
-                    "cid": cid,
-                    "tag": tag,
-                    "link": link,
-                    "command": command,
-                    "user_id": user_id,
-                    "reply_to_msg_id": reply_to_msg_id,
-                    "dump_msg_id": dump_msg_id,
-                }
-            },
-            upsert=True,
-        )
-
-    async def update_task_dump_msg(self, link, dump_chat, dump_msg_id):
-        if self._return:
-            return
-        await self.db.tasks[_part()].update_one(
-            {"link": link},
-            {"$set": {"dump_msg_id": dump_msg_id, "dump_chat": dump_chat}},
+        await self.db.tasks[TgClient.ID].insert_one(
+            {"_id": link, "cid": cid, "tag": tag}
         )
 
     async def get_pm_uids(self):
         if self._return:
             return
-        return [doc["_id"] async for doc in self.db.pm_users[_part()].find({})]
+        return [doc["_id"] async for doc in self.db.pm_users[TgClient.ID].find({})]
 
     async def set_pm_users(self, user_id):
         if self._return:
             return
-        if not bool(await self.db.pm_users[_part()].find_one({"_id": user_id})):
-            await self.db.pm_users[_part()].insert_one({"_id": user_id})
+        if not bool(await self.db.pm_users[TgClient.ID].find_one({"_id": user_id})):
+            await self.db.pm_users[TgClient.ID].insert_one({"_id": user_id})
             LOGGER.info(f"New PM User Added : {user_id}")
 
     async def rm_pm_user(self, user_id):
         if self._return:
             return
-        await self.db.pm_users[_part()].delete_one({"_id": user_id})
+        await self.db.pm_users[TgClient.ID].delete_one({"_id": user_id})
 
     async def rm_complete_task(self, link):
         if self._return:
             return
-        await self.db.tasks[_part()].delete_one({"link": link})
+        await self.db.tasks[TgClient.ID].delete_one({"_id": link})
 
     async def get_incomplete_tasks(self):
         notifier_dict = {}
         if self._return:
             return notifier_dict
-        if await self.db.tasks[_part()].find_one():
-            rows = self.db.tasks[_part()].find({})
+        if await self.db.tasks[TgClient.ID].find_one():
+            rows = self.db.tasks[TgClient.ID].find({})
             async for row in rows:
-                link = row.get("link") or row.get("_id")
-                if not link:
-                    continue
-                cid = row["cid"]
-                tag = row["tag"]
-                task_data = {
-                    "link": link,
-                    "command": row.get("command", ""),
-                    "user_id": row.get("user_id", 0),
-                    "reply_to_msg_id": row.get("reply_to_msg_id", 0),
-                    "dump_msg_id": row.get("dump_msg_id", 0),
-                    "dump_chat": row.get("dump_chat", 0),
-                }
-                if cid in notifier_dict:
-                    if tag in notifier_dict[cid]:
-                        notifier_dict[cid][tag].append(task_data)
+                if row["cid"] in list(notifier_dict.keys()):
+                    if row["tag"] in list(notifier_dict[row["cid"]]):
+                        notifier_dict[row["cid"]][row["tag"]].append(row["_id"])
                     else:
-                        notifier_dict[cid][tag] = [task_data]
+                        notifier_dict[row["cid"]][row["tag"]] = [row["_id"]]
                 else:
-                    notifier_dict[cid] = {tag: [task_data]}
+                    notifier_dict[row["cid"]] = {row["tag"]: [row["_id"]]}
+        await self.db.tasks[TgClient.ID].drop()
         return notifier_dict
-
-    async def drop_incomplete_tasks(self):
-        if self._return:
-            return
-        await self.db.tasks[_part()].drop()
 
     async def trunc_table(self, name):
         if self._return:
             return
-        await self.db[name][_part()].drop()
+        await self.db[name][TgClient.ID].drop()
 
 
 database = DbManager()

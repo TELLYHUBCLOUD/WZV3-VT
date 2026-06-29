@@ -1,7 +1,6 @@
 from asyncio import sleep
 
 from ... import intervals, jd_listener_lock, jd_downloads
-from ..ext_utils.bot_lock import jd_heavy_lock
 from ..ext_utils.bot_utils import new_task
 from ...core.jdownloader_booter import jdownloader
 from ..ext_utils.status_utils import get_task_by_gid
@@ -31,11 +30,7 @@ async def _on_download_complete(gid):
                     "ALL",
                     package_ids=jd_downloads[gid]["ids"],
                 )
-        await jd_heavy_lock.acquire()
-        try:
-            await task.listener.on_download_complete()
-        finally:
-            await jd_heavy_lock.release()
+        await task.listener.on_download_complete()
         if intervals["stopAll"]:
             return
         async with jd_listener_lock:

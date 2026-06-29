@@ -1,9 +1,8 @@
 from asyncio import sleep, gather
-from random import choice
 from re import match as re_match
 from time import time
 
-from pyrogram.types import Message, InputMediaPhoto
+from pyrogram.types import Message
 from pyrogram.enums import ButtonStyle, ParseMode
 from pyrogram.errors import (
     FloodWait,
@@ -12,7 +11,6 @@ from pyrogram.errors import (
     ReplyMarkupInvalid,
     PhotoInvalidDimensions,
     WebpageCurlFailed,
-    WebpageMediaEmpty,
     MediaEmpty,
     MediaCaptionTooLong,
     EntityBoundsInvalid,
@@ -35,7 +33,7 @@ from ... import (
 )
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
-from ..ext_utils.bot_utils import SetInterval, download_image_url, fetch_drive_cat
+from ..ext_utils.bot_utils import SetInterval, fetch_drive_cat
 from ..ext_utils.exceptions import TgLinkException
 from ..ext_utils.status_utils import get_readable_message
 from .button_build import ButtonMaker
@@ -45,42 +43,20 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     try:
         if photo:
             try:
-                if photo == "IMAGES":
-                    if Config.USE_IMAGES and Config.IMAGES:
-                        photo = choice(Config.IMAGES)
-                    else:
-                        photo = None
-                if photo is None:
-                    if isinstance(message, Message):
-                        return await message.reply(
-                            text=text,
-                            quote=True,
-                            disable_web_page_preview=True,
-                            disable_notification=True,
-                            reply_markup=buttons,
-                            **kwargs,
-                        )
-                    return await TgClient.bot.send_message(
+                if isinstance(message, int):
+                    return await TgClient.bot.send_photo(
                         chat_id=message,
-                        text=text,
-                        disable_web_page_preview=True,
-                        disable_notification=True,
-                        reply_markup=buttons,
-                    )
-                if isinstance(message, Message):
-                    return await message.reply_photo(
                         photo=photo,
-                        reply_to_message_id=message.id,
                         caption=text,
-                        quote=True,
                         reply_markup=buttons,
                         disable_notification=True,
                         **kwargs,
                     )
-                return await TgClient.bot.send_photo(
-                    chat_id=message,
+                return await message.reply_photo(
                     photo=photo,
+                    reply_to_message_id=message.id,
                     caption=text,
+                    quote=True,
                     reply_markup=buttons,
                     disable_notification=True,
                     **kwargs,
@@ -99,41 +75,27 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                     block,
                     photo,
                 )
-            except (
-                PhotoInvalidDimensions,
-                WebpageCurlFailed,
-                WebpageMediaEmpty,
-                MediaEmpty,
-            ):
-                try:
-                    des_dir = await download_image_url(photo)
-                    if des_dir:
-                        msg = await send_message(message, text, buttons, block, des_dir)
-                        from aiofiles.os import remove as aioremove
-
-                        await aioremove(des_dir)
-                        return msg
-                except Exception:
-                    LOGGER.error("Failed to send fallback photo", exc_info=True)
+            except (PhotoInvalidDimensions, WebpageCurlFailed, MediaEmpty):
+                LOGGER.error("Invalid photo dimensions or empty media", exc_info=True)
                 return
             except Exception:
                 LOGGER.error("Error while sending photo", exc_info=True)
                 return
-        if isinstance(message, Message):
-            return await message.reply(
+        if isinstance(message, int):
+            return await TgClient.bot.send_message(
+                chat_id=message,
                 text=text,
-                quote=True,
                 disable_web_page_preview=True,
                 disable_notification=True,
                 reply_markup=buttons,
-                **kwargs,
             )
-        return await TgClient.bot.send_message(
-            chat_id=int(message),
+        return await message.reply(
             text=text,
+            quote=True,
             disable_web_page_preview=True,
             disable_notification=True,
             reply_markup=buttons,
+            **kwargs,
         )
     except FloodWait as f:
         LOGGER.warning(str(f))
@@ -147,49 +109,115 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except (MessageEmpty, EntityBoundsInvalid):
         return await send_message(message, text, parse_mode=ParseMode.DISABLED)
     except PeerIdInvalid:
-        LOGGER.warning(f"PeerIdInvalid {type(message)}")  # My Debug Style
-        if isinstance(message, (int, str)):
-            return await send_message(int(message), text, buttons, block, photo)
-    except ConnectionError:
-        return
+        if isinstance(message, int):
+            await TgClient.bot.resolve_peer(message)
+            return await send_message(message, text, buttons, block, photo)
+        raise
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
 
 
-async def edit_message(message, text, buttons=None, block=True, photo=None):
-    try:
-        if message.media:
-            if photo:
-                if photo == "IMAGES":
-                    if Config.USE_IMAGES and Config.IMAGES:
-                        photo = choice(Config.IMAGES)
-                    else:
-                        photo = None
-                if photo:
-                    try:
-                        return await message.edit_media(
-                            InputMediaPhoto(photo, text), reply_markup=buttons
-                        )
-                    except (
-                        PhotoInvalidDimensions,
-                        WebpageCurlFailed,
-                        WebpageMediaEmpty,
-                        MediaEmpty,
-                    ):
-                        des_dir = await download_image_url(photo)
-                        if des_dir:
-                            msg = await message.edit_media(
-                                InputMediaPhoto(des_dir, text), reply_markup=buttons
-                            )
-                            from aiofiles.os import remove as aioremove
+async def open_category_btns(message):
+    user_id = message.from_user.id
+    msg_id = message.id
+    buttons = ButtonMaker()
+    cat_name = None
+    dcats = fetch_drive_cat(user_id)
+    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
+    default_index = user_data.get(user_id, {}).get("INDEX_URL") or Config.INDEX_URL
+    merged = {
+        "Default": {"drive_id": default_id, "index_link": default_index},
+        **dcats,
+        **categories_dict,
+    }
+    for i, name in enumerate(merged):
+        if i == 0:
+            cat_name = name
+        buttons.data_button(
+            f"{'✓️' if i == 0 else ''} {name}",
+            f"scat {user_id} {msg_id} {name.replace(' ', '_')}",
+        )
+    buttons.data_button(
+        "Cancel",
+        f"scat {user_id} {msg_id} scancel",
+        "footer",
+        style=ButtonStyle.DANGER,
+    )
+    buttons.data_button(
+        "Done (60)",
+        f"scat {user_id} {msg_id} sdone",
+        "footer",
+        style=ButtonStyle.SUCCESS,
+    )
+    prompt = await send_message(
+        message,
+        f"<b>Select the category where you want to upload</b>\n\n"
+        f"<i><b>Upload Category:</b></i> <code>{cat_name or 'None'}</code>\n\n"
+        f"<b>Timeout:</b> 60 sec",
+        buttons.build_menu(3),
+    )
+    start_time = time()
+    bot_cache[msg_id] = [None, None, False, False, start_time]
+    while time() - start_time <= 60:
+        await sleep(0.5)
+        if bot_cache[msg_id][2] or bot_cache[msg_id][3]:
+            break
+    drive_id, index_link, _, is_cancelled, __ = bot_cache[msg_id]
+    if not is_cancelled:
+        await delete_message(prompt)
+    else:
+        await edit_message(prompt, "<b>Task Cancelled</b>")
+    del bot_cache[msg_id]
+    return drive_id, index_link, is_cancelled
 
-                            await aioremove(des_dir)
-                            return msg
-                        return await message.edit_caption(
-                            caption=text, reply_markup=buttons
-                        )
-            return await message.edit_caption(caption=text, reply_markup=buttons)
+
+async def open_drive_clean(message):
+    user_id = message.from_user.id
+    msg_id = message.id
+    buttons = ButtonMaker()
+    dcats = fetch_drive_cat(user_id)
+    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
+    merged = {"Default": {"drive_id": default_id}, **dcats, **categories_dict}
+    first_cat = None
+    for i, name in enumerate(merged):
+        if i == 0:
+            first_cat = name
+        buttons.data_button(
+            f"{'✓️' if i == 0 else ''} {name}",
+            f"gdccat {user_id} {msg_id} {name.replace(' ', '_')}",
+        )
+    buttons.data_button(
+        "Cancel",
+        f"gdccat {user_id} {msg_id} ccancel",
+        position="footer",
+        style=ButtonStyle.DANGER,
+    )
+    prompt = await send_message(
+        message,
+        f"<b>Select Drive Category to Clean</b>\n\n"
+        f"<b>Category:</b> <code>{first_cat or 'None'}</code>\n\n"
+        f"<b>Timeout:</b> 60 sec",
+        buttons.build_menu(3),
+    )
+    start_time = time()
+    bot_cache[msg_id] = [None, False, False, start_time]
+    while time() - start_time <= 60:
+        await sleep(0.5)
+        if bot_cache[msg_id][1] or bot_cache[msg_id][2]:
+            break
+    drive_id = bot_cache[msg_id][0]
+    is_cancelled = bot_cache[msg_id][1]
+    if not is_cancelled:
+        await delete_message(prompt)
+    else:
+        await edit_message(prompt, "<b>Task Cancelled</b>")
+    del bot_cache[msg_id]
+    return drive_id, is_cancelled
+
+
+async def edit_message(message, text, buttons=None, block=True):
+    try:
         return await message.edit(
             text=text,
             disable_web_page_preview=True,
@@ -199,15 +227,13 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
         pass
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
-        return await edit_message(message, text, None, block, photo)
+        return await edit_message(message, text, None)
     except FloodWait as f:
         LOGGER.warning(str(f))
         if not block:
             return str(f)
         await sleep(f.value * 1.2)
-        return await edit_message(message, text, buttons, block, photo)
-    except ConnectionError:
-        return
+        return await edit_message(message, text, buttons)
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -222,8 +248,6 @@ async def edit_reply_markup(message, buttons):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await edit_reply_markup(message, buttons)
-    except ConnectionError:
-        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -242,8 +266,6 @@ async def send_file(message, file, caption="", buttons=None):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await send_file(message, file, caption)
-    except ConnectionError:
-        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -251,7 +273,8 @@ async def send_file(message, file, caption="", buttons=None):
 
 async def send_rss(text, chat_id, thread_id):
     try:
-        return await TgClient.bot.send_message(
+        app = TgClient.user or TgClient.bot
+        return await app.send_message(
             chat_id=chat_id,
             text=text,
             disable_web_page_preview=True,
@@ -261,9 +284,7 @@ async def send_rss(text, chat_id, thread_id):
     except (FloodWait, FloodPremiumWait) as f:
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
-        return await send_rss(text, chat_id, thread_id)
-    except ConnectionError:
-        return
+        return await send_rss(text)
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -402,7 +423,7 @@ async def update_status_message(sid, force=False):
             return
         if text != status_dict[sid]["message"].text:
             message = await edit_message(
-                status_dict[sid]["message"], text, buttons, block=False, photo="IMAGES"
+                status_dict[sid]["message"], text, buttons, block=False
             )
             if isinstance(message, str):
                 if message.startswith("Telegram says: [40"):
@@ -439,9 +460,7 @@ async def send_status_message(msg, user_id=0):
                     del intervals["status"][sid]
                 return
             old_message = status_dict[sid]["message"]
-            message = await send_message(
-                msg, text, buttons, block=False, photo="IMAGES"
-            )
+            message = await send_message(msg, text, buttons, block=False)
             if isinstance(message, str):
                 LOGGER.error(
                     f"Status with id: {sid} haven't been sent. Error: {message}"
@@ -454,9 +473,7 @@ async def send_status_message(msg, user_id=0):
             text, buttons = await get_readable_message(sid, is_user)
             if text is None:
                 return
-            message = await send_message(
-                msg, text, buttons, block=False, photo="IMAGES"
-            )
+            message = await send_message(msg, text, buttons, block=False)
             if isinstance(message, str):
                 LOGGER.error(
                     f"Status with id: {sid} haven't been sent. Error: {message}"
@@ -475,103 +492,3 @@ async def send_status_message(msg, user_id=0):
             intervals["status"][sid] = SetInterval(
                 Config.STATUS_UPDATE_INTERVAL, update_status_message, sid
             )
-
-
-async def open_category_btns(message):
-    user_id = message.from_user.id
-    msg_id = message.id
-    buttons = ButtonMaker()
-    cat_name = None
-    dcats = fetch_drive_cat(user_id)
-    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
-    default_index = user_data.get(user_id, {}).get("INDEX_URL") or Config.INDEX_URL
-    merged = {
-        "Default": {"drive_id": default_id, "index_link": default_index},
-        **dcats,
-        **categories_dict,
-    }
-    for i, name in enumerate(merged):
-        if i == 0:
-            cat_name = name
-        buttons.data_button(
-            f"{'✓️' if i == 0 else ''} {name}",
-            f"scat {user_id} {msg_id} {name.replace(' ', '_')}",
-        )
-    buttons.data_button(
-        "Cancel", f"scat {user_id} {msg_id} scancel", "footer", style=ButtonStyle.DANGER
-    )
-    buttons.data_button(
-        "Done (60)",
-        f"scat {user_id} {msg_id} sdone",
-        "footer",
-        style=ButtonStyle.SUCCESS,
-    )
-    prompt = await send_message(
-        message,
-        f"<b>Select the category where you want to upload</b>\n\n"
-        f"<i><b>Upload Category:</b></i> <code>{cat_name or 'None'}</code>\n\n"
-        f"<b>Timeout:</b> 60 sec",
-        buttons.build_menu(3),
-    )
-    start_time = time()
-    bot_cache[msg_id] = [None, None, False, False, start_time]
-    while time() - start_time <= 60:
-        await sleep(0.5)
-        if bot_cache[msg_id][2] or bot_cache[msg_id][3]:
-            break
-    drive_id, index_link, _, is_cancelled, __ = bot_cache[msg_id]
-    if not is_cancelled:
-        await delete_message(prompt)
-    else:
-        await edit_message(prompt, "<b>Task Cancelled</b>")
-    del bot_cache[msg_id]
-    return drive_id, index_link, is_cancelled
-
-
-async def open_drive_clean(message):
-    user_id = message.from_user.id
-    msg_id = message.id
-    buttons = ButtonMaker()
-    dcats = fetch_drive_cat(user_id)
-    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
-    default_index = user_data.get(user_id, {}).get("INDEX_URL") or Config.INDEX_URL
-    merged = {
-        "Default": {"drive_id": default_id, "index_link": default_index},
-        **dcats,
-        **categories_dict,
-    }
-    first_cat = None
-    for i, name in enumerate(merged):
-        if i == 0:
-            first_cat = name
-        buttons.data_button(
-            f"{'✓️' if i == 0 else ''} {name}",
-            f"gdccat {user_id} {msg_id} {name.replace(' ', '_')}",
-        )
-    buttons.data_button(
-        "Cancel",
-        f"gdccat {user_id} {msg_id} ccancel",
-        position="footer",
-        style=ButtonStyle.DANGER,
-    )
-    prompt = await send_message(
-        message,
-        f"<b>Select Drive Category to Clean</b>\n\n"
-        f"<b>Category:</b> <code>{first_cat or 'None'}</code>\n\n"
-        f"<b>Timeout:</b> 60 sec",
-        buttons.build_menu(3),
-    )
-    start_time = time()
-    bot_cache[msg_id] = [None, False, False, start_time]
-    while time() - start_time <= 60:
-        await sleep(0.5)
-        if bot_cache[msg_id][1] or bot_cache[msg_id][2]:
-            break
-    drive_id = bot_cache[msg_id][0]
-    is_cancelled = bot_cache[msg_id][1]
-    if not is_cancelled:
-        await delete_message(prompt)
-    else:
-        await edit_message(prompt, "<b>Task Cancelled</b>")
-    del bot_cache[msg_id]
-    return drive_id, is_cancelled

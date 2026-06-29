@@ -1,6 +1,5 @@
 from asyncio import gather, iscoroutinefunction
 from html import escape
-from pyrogram.enums import ButtonStyle
 from re import findall
 from time import time
 
@@ -10,6 +9,10 @@ from ... import (
     DOWNLOAD_DIR,
     bot_cache,
     bot_start_time,
+    non_queued_dl,
+    non_queued_up,
+    queued_dl,
+    queued_up,
     status_dict,
     task_dict,
     task_dict_lock,
@@ -35,6 +38,7 @@ class MirrorStatus:
     STATUS_SAMVID = "SamVid"
     STATUS_CONVERT = "Convert"
     STATUS_FFMPEG = "FFmpeg"
+    STATUS_AUTOPROCESS = "AutoProcess"
     STATUS_YT = "YouTube"
     STATUS_METADATA = "Metadata"
 
@@ -46,8 +50,8 @@ class EngineStatus:
         self.STATUS_AIOHTTP = f"AioHttp v{ver.get('aiohttp', 'N/A')}"
         self.STATUS_GDAPI = f"Google-API v{ver.get('gapi', 'N/A')}"
         self.STATUS_QBIT = f"qBit v{ver.get('qBittorrent', 'N/A')}"
-        self.STATUS_TGRAM = f"Pyro v{ver.get('pyrotgfork', 'N/A')}"
-        self.STATUS_MEGA = f"MegaSDK v{ver.get('mega', 'N/A')}"
+        self.STATUS_TGRAM = f"{Config.UPLOAD_ENGINE} v{Config.UPLOAD_ENGINE_VERSION}"
+        self.STATUS_MEGA = f"MegaCMD v{ver.get('mega', 'N/A')}"
         self.STATUS_YTDLP = f"yt-dlp v{ver.get('yt-dlp', 'N/A')}"
         self.STATUS_FFMPEG = f"ffmpeg v{ver.get('ffmpeg', 'N/A')}"
         self.STATUS_7Z = f"7z v{ver.get('7z', 'N/A')}"
@@ -74,6 +78,7 @@ STATUSES = {
     "SP": MirrorStatus.STATUS_SPLIT,
     "SV": MirrorStatus.STATUS_SAMVID,
     "FF": MirrorStatus.STATUS_FFMPEG,
+    "AP": MirrorStatus.STATUS_AUTOPROCESS,
     "PA": MirrorStatus.STATUS_PAUSED,
     "CK": MirrorStatus.STATUS_CHECK,
 }
@@ -84,7 +89,7 @@ async def get_task_by_gid(gid: str):
         for tk in task_dict.values():
             if hasattr(tk, "seeding"):
                 await tk.update()
-            if tk.gid() == gid or tk.gid().startswith(gid):
+            if tk.gid() == gid:
                 return tk
         return None
 
@@ -131,8 +136,6 @@ def get_raw_file_size(size):
 def get_readable_file_size(size_in_bytes):
     if not size_in_bytes:
         return "0B"
-    if size_in_bytes < 0:
-        return "Unknown"
 
     index = 0
     while size_in_bytes >= 1024 and index < len(SIZE_UNITS) - 1:
@@ -180,31 +183,43 @@ def time_to_seconds(time_duration):
 
 
 def speed_string_to_bytes(size_text: str):
+    if isinstance(size_text, (int, float)):
+        return int(size_text)
+    if not size_text:
+        return 0
     size = 0
-    size_text = size_text.lower()
-    if "k" in size_text:
-        size += float(size_text.split("k")[0]) * 1024
-    elif "m" in size_text:
-        size += float(size_text.split("m")[0]) * 1048576
-    elif "g" in size_text:
-        size += float(size_text.split("g")[0]) * 1073741824
-    elif "t" in size_text:
-        size += float(size_text.split("t")[0]) * 1099511627776
-    elif "b" in size_text:
-        size += float(size_text.split("b")[0])
-    return size
+    size_text = str(size_text).strip().lower()
+    try:
+        if "k" in size_text:
+            size += float(size_text.split("k")[0]) * 1024
+        elif "m" in size_text:
+            size += float(size_text.split("m")[0]) * 1048576
+        elif "g" in size_text:
+            size += float(size_text.split("g")[0]) * 1073741824
+        elif "t" in size_text:
+            size += float(size_text.split("t")[0]) * 1099511627776
+        elif "b" in size_text:
+            size += float(size_text.split("b")[0])
+        elif size_text:
+            size += float(size_text)
+    except (TypeError, ValueError):
+        return 0
+    return int(size)
 
 
 def get_progress_bar_string(pct):
     pct = float(str(pct).strip("%"))
     p = min(max(pct, 0), 100)
     cFull = int(p // 8)
-    cPart = int(p % 8 - 1)
-    p_str = "■" * cFull
-    if cPart >= 0:
-        p_str += ["▤", "▥", "▦", "▧", "▨", "▩", "■"][cPart]
-    p_str += "□" * (12 - cFull)
+    p_str = "⬢" * cFull
+    p_str += "⬡" * (12 - cFull)
     return f"[{p_str}]"
+
+def get_progress_bar_string(pct):
+    pct = float(str(pct).strip("%"))
+    p = min(max(pct, 0), 100)
+    full = int(p // 8)
+    return f"[{'■' * full}{'□' * (12 - full)}]"
 
 
 async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=1):
@@ -279,23 +294,18 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         else:
             msg += f"\n┠ <b>Size</b> → <i>{task.size()}</i>"
         msg += f"\n┠ <b>Engine</b> → <i>{task.engine}</i>"
+        upload_engine = getattr(task.listener, "upload_engine", "")
+        upload_client = getattr(task.listener, "upload_client", "")
+        if upload_engine:
+            msg += f"\n┠ <b>Upload Engine</b> → <i>{upload_engine}</i>"
+        if upload_client:
+            msg += f"\n┠ <b>Upload Client</b> → <i>{upload_client}</i>"
         msg += f"\n┠ <b>In Mode</b> → <i>{task.listener.mode[0]}</i>"
         msg += f"\n┠ <b>Out Mode</b> → <i>{task.listener.mode[1]}</i>"
+        # TODO: Add Bt Sel
         from ..telegram_helper.bot_commands import BotCommands
 
-        if tstatus in [
-            MirrorStatus.STATUS_DOWNLOAD,
-            MirrorStatus.STATUS_PAUSED,
-            MirrorStatus.STATUS_QUEUEDL,
-        ]:
-            if (
-                task.listener.is_torrent
-                or task.listener.is_qbit
-                or task.listener.is_nzb
-            ):
-                msg += f"\n┠ <b>Select</b> → /{BotCommands.SelectCommand[1]}_{task.gid()[:8]}"
-
-        msg += f"\n<b>┖ Stop</b> → <i>/{BotCommands.CancelTaskCommand[1]}_{task.gid()[:8]}</i>\n\n"
+        msg += f"\n<b>┖ Stop</b> → <i>/{BotCommands.CancelTaskCommand[1]}_{task.gid()}</i>\n\n"
 
     if len(msg) == 0:
         if status == "All":
@@ -304,14 +314,14 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             msg = f"No Active {status} Tasks!\n\n"
 
     msg += "⌬ <b><u>Bot Stats</u></b>"
+    theme = str(Config.STATUS_THEME or "starfall").lower()
+    if theme == "compact":
+        msg = msg.replace("Bot Stats", "Bot Stats")
+    elif theme == "starfall":
+        msg = msg.replace("Bot Stats", "Starfall Status")
     buttons = ButtonMaker()
     if not is_user:
-        buttons.data_button(
-            "📜 TStats",
-            f"status {sid} ov",
-            position="header",
-            style=ButtonStyle.PRIMARY,
-        )
+        buttons.data_button("📜 TStats", f"status {sid} ov", position="header")
     if len(tasks) > STATUS_LIMIT:
         msg += f"<b>Page:</b> {page_no}/{pages} | <b>Tasks:</b> {tasks_no} | <b>Step:</b> {page_step}\n"
         buttons.data_button("<<", f"status {sid} pre", position="header")
@@ -323,10 +333,38 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         for label, status_value in list(STATUSES.items()):
             if status_value != status:
                 buttons.data_button(label, f"status {sid} st {status_value}")
-    buttons.data_button(
-        "♻️ Refresh", f"status {sid} ref", position="header", style=ButtonStyle.PRIMARY
-    )
+    buttons.data_button("🔴 Refresh", f"status {sid} ref", position="header")
+    for item in buttons.buttons["header"]:
+        if getattr(item, "callback_data", "") == f"status {sid} ref":
+            item.text = "🔴 Refresh"
     button = buttons.build_menu(8)
     msg += f"\n┟ <b>CPU</b> → {cpu_percent()}% | <b>F</b> → {get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)} [{round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%]"
     msg += f"\n┖ <b>RAM</b> → {virtual_memory().percent}% | <b>UP</b> → {get_readable_time(time() - bot_start_time)}"
+    active_count = len(non_queued_dl) + len(non_queued_up)
+    queue_count = len(queued_dl) + len(queued_up)
+    msg += f"\n<b>Active/Queued</b> -> {active_count}/{queue_count}"
+    try:
+        from .starfallx_upload import starfallx_upload
+
+        sfx = starfallx_upload.status_summary()
+        msg += (
+            f"\n<b>{sfx['engine']}</b> -> Helpers {sfx['helper_active']}"
+            f" | Ready {sfx.get('ready', 0)} | Main {sfx['main_active']}"
+            f" | Cooling {sfx['cooling']}"
+        )
+    except Exception:
+        pass
+    cleanup = {
+        "\u00e2\u201d\u2013": "-",
+        "\u00e2\u201d\u0178": "-",
+        "\u00e2\u201d\u00a0": "-",
+        "\u00e2\u2020\u2019": ":",
+        "\u00e2\u0152\u00ac": "",
+        "\u00e2\u00ac\u00a2": "■",
+        "\u00e2\u00ac\u00a1": "□",
+        "\u00f0\u0178\u201d\u00b4": "🔴",
+        "\u00f0\u0178\u201c\u0153": "",
+    }
+    for bad, good in cleanup.items():
+        msg = msg.replace(bad, good)
     return msg, button

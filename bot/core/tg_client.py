@@ -67,6 +67,19 @@ class TgClient:
         return proxies
 
     @classmethod
+    async def _start_with_floodwait(cls, client, label):
+        while True:
+            try:
+                return await client.start()
+            except FloodWait as e:
+                wait_time = int(getattr(e, "value", 0) or 0) + 5
+                wait_time = max(wait_time, 5)
+                LOGGER.warning(
+                    f"{label} hit Telegram FloodWait. Waiting {wait_time}s before retry."
+                )
+                await sleep(wait_time)
+
+    @classmethod
     async def _retry_hclient(cls, no, b_token, delay, proxy=None):
         await sleep(delay)
         try:
@@ -268,6 +281,12 @@ class TgClient:
     @classmethod
     async def stop(cls):
         async with cls._lock:
+            try:
+                from ..helper.ext_utils.starfallx_upload import starfallx_upload
+
+                await starfallx_upload.stop_all()
+            except Exception as e:
+                LOGGER.warning(f"Failed to stop StarFallX upload clients: {e}")
             clients = []
             if cls.bot:
                 clients.append(cls.bot.stop())

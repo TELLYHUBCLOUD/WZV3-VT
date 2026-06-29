@@ -1,4 +1,5 @@
 from asyncio import sleep, gather
+from random import choice
 from re import match as re_match
 from time import time
 
@@ -42,6 +43,10 @@ from .button_build import ButtonMaker
 async def send_message(message, text, buttons=None, block=True, photo=None, **kwargs):
     try:
         if photo:
+            if photo == "IMAGES":
+                photo = choice(Config.IMAGES) if Config.IMAGES else None
+            if not photo:
+                return await send_message(message, text, buttons, block, None, **kwargs)
             try:
                 if isinstance(message, int):
                     return await TgClient.bot.send_photo(
@@ -77,10 +82,10 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 )
             except (PhotoInvalidDimensions, WebpageCurlFailed, MediaEmpty):
                 LOGGER.error("Invalid photo dimensions or empty media", exc_info=True)
-                return
+                return await send_message(message, text, buttons, block, None, **kwargs)
             except Exception:
                 LOGGER.error("Error while sending photo", exc_info=True)
-                return
+                return await send_message(message, text, buttons, block, None, **kwargs)
         if isinstance(message, int):
             return await TgClient.bot.send_message(
                 chat_id=message,

@@ -318,9 +318,39 @@ async def cmd_exec(cmd, shell=False):
 
 
 def new_task(func):
+    async def _notify_error(update, error):
+        try:
+            from ..telegram_helper.message_utils import send_message
+
+            target = getattr(update, "message", None) or update
+            if target is not None:
+                await send_message(
+                    target,
+                    f"<b>Command failed:</b>\n<code>{str(error)[:1000]}</code>",
+                )
+        except Exception:
+            LOGGER.error("Failed to notify command error", exc_info=True)
+
+    def _log_task_result(task, update):
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except Exception as e:
+            error = e
+        if error is None:
+            return
+        LOGGER.error(
+            f"Command task failed in {func.__name__}: {error}",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        bot_loop.create_task(_notify_error(update, error))
+
     @wraps(func)
     async def wrapper(*args, **kwargs):
         task = bot_loop.create_task(func(*args, **kwargs))
+        update = args[1] if len(args) > 1 else None
+        task.add_done_callback(lambda done: _log_task_result(done, update))
         return task
 
     return wrapper

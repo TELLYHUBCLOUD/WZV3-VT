@@ -155,9 +155,7 @@ async def process_auto_pipeline(listener, up_path, gid):
     if auto_intro:
         up_path = await _auto_intro(listener, up_path)
 
-    if _quiet_messages():
-        await send_message(listener.message, "Auto Process: processing finished. Starting upload...")
-    else:
+    if not _quiet_messages():
         await _set_process_message(listener, "Auto Process: processing finished. Starting upload...")
     return up_path
 

@@ -366,7 +366,20 @@ class StarFallXUploadManager:
             no_updates=True,
         )
         try:
-            client = await TgClient._start_with_floodwait(client, label)
+            starter = getattr(TgClient, "_start_with_floodwait", None)
+            if starter:
+                client = await starter(client, label)
+            else:
+                while True:
+                    try:
+                        client = await client.start()
+                        break
+                    except FloodWait as e:
+                        wait_time = max(int(getattr(e, "value", 0) or 0) + 5, 5)
+                        LOGGER.warning(
+                            f"{label} hit Telegram FloodWait. Waiting {wait_time}s before retry."
+                        )
+                        await sleep(wait_time)
         except Exception:
             with contextlib.suppress(Exception):
                 await client.stop()
@@ -829,13 +842,9 @@ class StarFallXUploadManager:
                 if route:
                     return route
 
-        if (
-            is_owner_task
-            or _safe_bool(getattr(Config, "HELPER_TOKEN_NORMAL_USERS_GLOBAL_FALLBACK", False), False)
-        ):
-            route = await self._try_global_records(chat_id, thread_id)
-            if route:
-                return route
+        route = await self._try_global_records(chat_id, thread_id)
+        if route:
+            return route
 
         max_main = max(0, _safe_int(Config.MAIN_BOT_FALLBACK_UPLOADS, 0))
         if max_main and self._main_active < max_main:

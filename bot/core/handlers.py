@@ -305,6 +305,14 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            sudo_only,
+            filters=command(BotCommands.RestartSessionsCommand, case_sensitive=True)
+            & CustomFilters.authorized
+            & ~CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             imdb_search,
             filters=command(BotCommands.IMDBCommand, case_sensitive=True)
             & CustomFilters.authorized,

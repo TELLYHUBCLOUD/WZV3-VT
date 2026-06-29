@@ -217,6 +217,15 @@ async def load_settings():
             deploy_filter, {"_id": 0}
         )
 
+        legacy_part = str(Config.BOT_TOKEN.split(":", 1)[0])
+        legacy_user_exists = None
+        legacy_rss_exists = None
+        if legacy_part != PART:
+            legacy_user_exists, legacy_rss_exists = await gather(
+                database.db.users[legacy_part].find_one(),
+                database.db.rss[legacy_part].find_one(),
+            )
+
         results = await gather(
             database.db.settings.config.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.files.find_one(deploy_filter, {"_id": 0}),
@@ -238,6 +247,44 @@ async def load_settings():
             user_exists,
             rss_exists,
         ) = results
+
+        if legacy_part != PART:
+            legacy_filter = {"_id": legacy_part}
+            legacy_results = await gather(
+                database.db.settings.config.find_one(legacy_filter, {"_id": 0})
+                if not config_dict
+                else sleep(0),
+                database.db.settings.files.find_one(legacy_filter, {"_id": 0})
+                if not pf_dict
+                else sleep(0),
+                database.db.settings.aria2c.find_one(legacy_filter, {"_id": 0})
+                if not a2c_options
+                else sleep(0),
+                database.db.settings.qbittorrent.find_one(legacy_filter, {"_id": 0})
+                if not qbit_opt and not Config.DISABLE_TORRENTS
+                else sleep(0),
+                database.db.settings.nzb.find_one(legacy_filter, {"_id": 0})
+                if not nzb_opt
+                else sleep(0),
+            )
+            (
+                legacy_config,
+                legacy_files,
+                legacy_aria2,
+                legacy_qbit,
+                legacy_nzb,
+            ) = legacy_results
+            if legacy_config:
+                LOGGER.info("Migrating legacy saved Config collection to current MongoDB partition")
+                config_dict = legacy_config
+            if legacy_files:
+                pf_dict = legacy_files
+            if legacy_aria2:
+                a2c_options = legacy_aria2
+            if legacy_qbit:
+                qbit_opt = legacy_qbit
+            if legacy_nzb:
+                nzb_opt = legacy_nzb
 
         if old_config is None:
             await database.db.settings.deployConfig.replace_one(
@@ -291,6 +338,12 @@ async def load_settings():
 
         if user_exists:
             rows = database.db.users[PART].find({})
+        elif legacy_user_exists:
+            LOGGER.info("Migrating legacy Users Data collection to current MongoDB partition")
+            rows = database.db.users[legacy_part].find({})
+        else:
+            rows = None
+        if rows is not None:
             async for row in rows:
                 uid = row["_id"]
                 del row["_id"]
@@ -321,14 +374,24 @@ async def load_settings():
                         await save_file(path, row[key])
                         row[key] = path
                 user_data[uid] = row
+                if legacy_user_exists:
+                    await database.update_user_data(uid)
             LOGGER.info("Users Data has been imported from MongoDB")
 
         if rss_exists:
             rows = database.db.rss[PART].find({})
+        elif legacy_rss_exists:
+            LOGGER.info("Migrating legacy RSS Data collection to current MongoDB partition")
+            rows = database.db.rss[legacy_part].find({})
+        else:
+            rows = None
+        if rows is not None:
             async for row in rows:
                 user_id = row["_id"]
                 del row["_id"]
                 rss_dict[user_id] = row
+                if legacy_rss_exists:
+                    await database.rss_update(user_id)
             LOGGER.info("RSS data has been imported from MongoDB")
 
 

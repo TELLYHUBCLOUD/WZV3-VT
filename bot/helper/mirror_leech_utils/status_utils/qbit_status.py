@@ -12,8 +12,8 @@ from ...ext_utils.status_utils import (
 
 async def get_download(tag, old_info=None):
     try:
-        res = (await TorrentManager.qbittorrent.torrents.info(tag=tag))[0]
-        return res or old_info
+        res = await TorrentManager.qbittorrent.torrents.info(tag=tag)
+        return res[0] if res else old_info
     except Exception as e:
         LOGGER.error(f"{e}: Qbittorrent, while getting torrent info. Tag: {tag}")
         return old_info
@@ -31,28 +31,42 @@ class QbittorrentStatus:
         self._info = await get_download(f"{self.listener.mid}", self._info)
 
     def progress(self):
+        if not self._info:
+            return "0%"
         return f"{round(self._info.progress * 100, 2)}%"
 
     def processed_bytes(self):
+        if not self._info:
+            return get_readable_file_size(0)
         return get_readable_file_size(self._info.downloaded)
 
     def speed(self):
+        if not self._info:
+            return f"{get_readable_file_size(0)}/s"
         return f"{get_readable_file_size(self._info.dlspeed)}/s"
 
     def name(self):
+        if not self._info:
+            return self.listener.name
         if self._info.state in ["metaDL", "checkingResumeData"]:
             return f"[METADATA]{self.listener.name}"
         else:
             return self.listener.name
 
     def size(self):
+        if not self._info:
+            return get_readable_file_size(0)
         return get_readable_file_size(self._info.size)
 
     def eta(self):
+        if not self._info:
+            return "-"
         return get_readable_time(self._info.eta.total_seconds())
 
     async def status(self):
         await self.update()
+        if not self._info:
+            return MirrorStatus.STATUS_DOWNLOAD
         state = self._info.state
         if state == "queuedDL" or self.queued:
             return MirrorStatus.STATUS_QUEUEDL
@@ -68,9 +82,13 @@ class QbittorrentStatus:
             return MirrorStatus.STATUS_DOWNLOAD
 
     def seeders_num(self):
+        if not self._info:
+            return 0
         return self._info.num_seeds
 
     def leechers_num(self):
+        if not self._info:
+            return 0
         return self._info.num_leechs
 
     def uploaded_bytes(self):
@@ -92,11 +110,16 @@ class QbittorrentStatus:
         return self.hash()[:12]
 
     def hash(self):
+        if not self._info:
+            return str(self.listener.mid)
         return self._info.hash
 
     async def cancel_task(self):
         self.listener.is_cancelled = True
         await self.update()
+        if not self._info:
+            await self.listener.on_download_error("Stopped by user!")
+            return
         await TorrentManager.qbittorrent.torrents.stop([self._info.hash])
         if not self.seeding:
             if self.queued:

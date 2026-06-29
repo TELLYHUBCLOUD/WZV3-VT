@@ -74,7 +74,7 @@ async def add_qb_torrent(listener, path, ratio, seed_time):
             return
         tor_info = await TorrentManager.qbittorrent.torrents.info(tag=f"{listener.mid}")
         if len(tor_info) == 0:
-            while True:
+            for _ in range(30):
                 if add_to_queue and event.is_set():
                     add_to_queue = False
                 tor_info = await TorrentManager.qbittorrent.torrents.info(
@@ -83,6 +83,11 @@ async def add_qb_torrent(listener, path, ratio, seed_time):
                 if len(tor_info) > 0:
                     break
                 await sleep(1)
+            else:
+                await listener.on_download_error(
+                    "qBittorrent did not expose this batch after adding it. Try again after the current qB batch finishes."
+                )
+                return
         tor_info = tor_info[0]
         listener.name = tor_info.name
         ext_hash = tor_info.hash

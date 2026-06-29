@@ -225,7 +225,7 @@ async def bq_leech(client, message):
             started = False
             while (
                 next_batch < len(batches)
-                and active_downloads < dl_limit
+                and active_downloads < 1
                 and active_uploads < up_limit
                 and not controller.cancelled
             ):

@@ -253,6 +253,7 @@ class Config:
     OWNER_HELPER_BOT_TOKENS = ""
     DRIVE_CATEGORY_MODE = False
     DRIVE_CATEGORY_SA = ""
+    UPDATE_PKGS = True
     UPSTREAM_REPO = ""
     UPSTREAM_BRANCH = "master"
     USENET_SERVERS = []

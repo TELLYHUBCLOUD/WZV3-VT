@@ -11,12 +11,12 @@ class ButtonMaker:
             "footer": [],
         }
 
-    def url_button(self, key, link, position=None):
+    def url_button(self, key, link, position=None, **kwargs):
         self.buttons[position if position in self.buttons else "default"].append(
             InlineKeyboardButton(text=key, url=link)
         )
 
-    def data_button(self, key, data, position=None):
+    def data_button(self, key, data, position=None, **kwargs):
         self.buttons[position if position in self.buttons else "default"].append(
             InlineKeyboardButton(text=key, callback_data=data)
         )

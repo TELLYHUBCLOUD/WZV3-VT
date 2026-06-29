@@ -41,6 +41,7 @@ from .button_build import ButtonMaker
 
 
 async def send_message(message, text, buttons=None, block=True, photo=None, **kwargs):
+    text = _fit_telegram_text(text)
     try:
         if photo:
             if photo == "IMAGES":
@@ -94,6 +95,9 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 disable_notification=True,
                 reply_markup=buttons,
             )
+        if not hasattr(message, "reply"):
+            LOGGER.warning(f"send_message got invalid target: {type(message).__name__}")
+            return "Invalid message target"
         return await message.reply(
             text=text,
             quote=True,
@@ -222,6 +226,7 @@ async def open_drive_clean(message):
 
 
 async def edit_message(message, text, buttons=None, block=True):
+    text = _fit_telegram_text(text)
     try:
         return await message.edit(
             text=text,
@@ -242,6 +247,14 @@ async def edit_message(message, text, buttons=None, block=True):
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
+
+
+def _fit_telegram_text(text, limit=4000):
+    text = str(text or "")
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n<code>... truncated ...</code>"
+    return text[: limit - len(suffix)] + suffix
 
 
 async def edit_reply_markup(message, buttons):

@@ -270,9 +270,25 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            sudo_only,
+            filters=command(BotCommands.LogCommand, case_sensitive=True)
+            & CustomFilters.authorized
+            & ~CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             restart_bot,
             filters=command(BotCommands.RestartCommand, case_sensitive=True)
             & CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            sudo_only,
+            filters=command(BotCommands.RestartCommand, case_sensitive=True)
+            & CustomFilters.authorized
+            & ~CustomFilters.sudo,
         )
     )
     TgClient.bot.add_handler(

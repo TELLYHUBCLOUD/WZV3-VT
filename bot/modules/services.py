@@ -5,6 +5,7 @@ from uuid import uuid4
 from re import match
 
 from aiofiles import open as aiopen
+from aiofiles.os import path as aiopath
 from cloudscraper import create_scraper
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -176,11 +177,24 @@ async def ping(_, message):
 @new_task
 async def log(_, message):
     uid = message.from_user.id
+    if not await aiopath.isfile("log.txt"):
+        return await send_message(message, "<b>Log file not found yet.</b>")
     buttons = ButtonMaker()
     buttons.data_button("Log Disp", f"log {uid} disp")
     buttons.data_button("Web Log", f"log {uid} web")
     buttons.data_button("Close", f"log {uid} close", style=ButtonStyle.DANGER)
-    await send_file(message, "log.txt", buttons=buttons.build_menu(2))
+    result = await send_file(message, "log.txt", buttons=buttons.build_menu(2))
+    if isinstance(result, str):
+        await send_message(message, f"<b>Failed to send log file:</b>\n<code>{escape(result)}</code>")
+
+
+@new_task
+async def sudo_only(_, message):
+    await send_message(
+        message,
+        "<b>This command is only for the owner/sudo users.</b>\n\n"
+        "<i>Add yourself as sudo or check OWNER_ID/SUDO_USERS in config.py.</i>",
+    )
 
 
 @new_task

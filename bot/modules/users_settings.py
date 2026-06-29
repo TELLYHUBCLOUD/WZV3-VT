@@ -2188,7 +2188,7 @@ async def edit_user_settings(client, query):
             back_to = "gdrive"
         elif data[3] in ["USER_TOKENS", "USE_DEFAULT_COOKIE"]:
             back_to = "general"
-        elif data[3].startswith("AUTO_"):
+        elif data[3].startswith("AUTO_") and data[3] != "AUTO_THUMBNAIL":
             back_to = "autoprocess"
         else:
             back_to = "leech"

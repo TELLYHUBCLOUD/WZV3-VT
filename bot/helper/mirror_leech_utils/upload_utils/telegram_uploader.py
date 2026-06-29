@@ -679,6 +679,7 @@ class TelegramUploader:
                     else Config.AUTO_THUMBNAIL
                 )
                 if auto_thumb_enabled:
+                    LOGGER.info(f"Auto-thumbnail enabled for: {file}")
                     try:
                         as_doc = self._listener.as_doc
                         custom_name = getattr(self._listener, "custom_name", "")
@@ -703,18 +704,30 @@ class TelegramUploader:
                                 )
                                 if tmdb_thumb:
                                     thumb = tmdb_thumb
+                        if thumb:
+                            LOGGER.info(f"Auto-thumbnail selected: {thumb}")
+                        else:
+                            LOGGER.info(f"Auto-thumbnail provider lookup found no image for: {file}")
                     except Exception as e:
                         LOGGER.warning(f"Auto-thumbnail failed: {e}")
+                else:
+                    LOGGER.info(f"Auto-thumbnail disabled for: {file}")
+            elif not is_image and thumb:
+                LOGGER.info(f"Using custom thumbnail for: {file}")
 
             if not is_image and thumb is None:
                 file_name = ospath.splitext(file)[0]
                 thumb_path = f"{self._path}/yt-dlp-thumb/{file_name}.jpg"
                 if await aiopath.isfile(thumb_path):
                     thumb = thumb_path
+                    LOGGER.info(f"Using yt-dlp thumbnail for: {file}")
                 elif await aiopath.isfile(thumb_path.replace("/yt-dlp-thumb", "")):
                     thumb = thumb_path.replace("/yt-dlp-thumb", "")
+                    LOGGER.info(f"Using adjacent thumbnail for: {file}")
                 elif is_audio and not is_video:
                     thumb = await get_audio_thumbnail(self._up_path)
+                    if thumb:
+                        LOGGER.info(f"Using embedded audio thumbnail for: {file}")
 
             private_text = " ".join(
                 filter(
@@ -741,6 +754,8 @@ class TelegramUploader:
                 key = "documents"
                 if is_video and thumb is None:
                     thumb = await get_video_thumbnail(self._up_path, None)
+                    if thumb:
+                        LOGGER.info(f"Using FFmpeg document thumbnail for: {file}")
 
                 if self._listener.is_cancelled:
                     await starfallx_upload.release_route(route)
@@ -774,8 +789,12 @@ class TelegramUploader:
                         self._listener.thumbnail_layout,
                         self._listener.screen_shots,
                     )
+                    if thumb:
+                        LOGGER.info(f"Using layout thumbnail for: {file}")
                 if thumb is None:
                     thumb = await get_video_thumbnail(self._up_path, duration)
+                    if thumb:
+                        LOGGER.info(f"Using FFmpeg video thumbnail for: {file}")
                 if thumb is not None and thumb != "none":
                     with Image.open(thumb) as img:
                         width, height = img.size

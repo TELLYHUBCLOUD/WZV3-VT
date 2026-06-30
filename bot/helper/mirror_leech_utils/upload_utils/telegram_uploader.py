@@ -490,7 +490,7 @@ class TelegramUploader:
                 self._error = ""
                 self._up_path = f_path = ospath.join(dirpath, file_)
                 if not await aiopath.exists(self._up_path):
-                    LOGGER.error(f"{self._up_path} not exists! Continue uploading!")
+                    LOGGER.warning(f"{self._up_path} not found; skipping upload.")
                     continue
                 try:
                     f_size = await aiopath.getsize(self._up_path)
@@ -642,6 +642,11 @@ class TelegramUploader:
         )
 
     async def _upload_file(self, cap_mono, file, o_path, force_document=False):
+        if not await aiopath.exists(o_path):
+            LOGGER.warning(f"{o_path} disappeared before upload; skipping.")
+            self._is_corrupted = True
+            return
+
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")
             await self._listener.on_upload_error(

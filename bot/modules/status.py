@@ -75,11 +75,12 @@ async def task_status(_, message):
 
 async def get_download_status(download):
     eng = download.engine
-    speed = (
-        download.speed()
-        if eng.startswith(("Pyro", "yt-dlp", "RClone", "Google-API"))
-        else 0
-    )
+    speed = 0
+    seed_speed = 0
+    with suppress(Exception):
+        speed = download.speed()
+    with suppress(Exception):
+        seed_speed = download.seed_speed()
     return (
         (
             await download.status()
@@ -87,6 +88,7 @@ async def get_download_status(download):
             else download.status()
         ),
         speed,
+        seed_speed,
         eng,
     )
 
@@ -155,11 +157,11 @@ async def status_pages(_, query):
         eng_status = EngineStatus()
         if any(
             eng in (eng_status.STATUS_ARIA2, eng_status.STATUS_QBIT)
-            for _, __, eng in status_results
+            for _, __, ___, eng in status_results
         ):
-            dl_speed, seed_speed = await TorrentManager.overall_speed()
+            dl_speed, up_speed = await TorrentManager.overall_speed()
 
-        if any(eng == eng_status.STATUS_SABNZBD for _, __, eng in status_results):
+        if any(eng == eng_status.STATUS_SABNZBD for _, __, ___, eng in status_results):
             if not Config.DISABLE_NZB and sabnzbd_client.LOGGED_IN:
                 dl_speed += (
                     int(
@@ -172,13 +174,13 @@ async def status_pages(_, query):
                     * 1024
                 )
 
-        if any(eng == eng_status.STATUS_JD for _, __, eng in status_results):
+        if any(eng == eng_status.STATUS_JD for _, __, ___, eng in status_results):
             if not Config.DISABLE_JD and jdownloader.is_connected:
                 dl_speed += (
                     await jdownloader.device.downloadcontroller.get_speed_in_bytes()
                 )
 
-        for status, speed, _ in status_results:
+        for status, speed, task_seed_speed, _ in status_results:
             match status:
                 case MirrorStatus.STATUS_DOWNLOAD:
                     tasks["Download"] += 1
@@ -189,6 +191,7 @@ async def status_pages(_, query):
                     up_speed += speed_string_to_bytes(speed)
                 case MirrorStatus.STATUS_SEED:
                     tasks["Seed"] += 1
+                    seed_speed += speed_string_to_bytes(task_seed_speed)
                 case MirrorStatus.STATUS_ARCHIVE:
                     tasks["Archive"] += 1
                 case MirrorStatus.STATUS_EXTRACT:

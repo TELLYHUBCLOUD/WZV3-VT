@@ -637,7 +637,8 @@ class TaskListener(TaskConfig):
         if self.pm_msg and (not Config.DELETE_LINKS or Config.CLEAN_LOG_MSG):
             await delete_message(self.pm_msg)
 
-        await clean_download(self.dir)
+        if not getattr(self, "bq_remove_torrent_keep_files", False):
+            await clean_download(self.dir)
         async with task_dict_lock:
             if self.mid in task_dict:
                 del task_dict[self.mid]
@@ -705,7 +706,8 @@ class TaskListener(TaskConfig):
 
         await start_from_queued()
         await sleep(3)
-        await clean_download(self.dir)
+        if not getattr(self, "bq_remove_torrent_keep_files", False):
+            await clean_download(self.dir)
         if self.up_dir:
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):
@@ -744,7 +746,8 @@ class TaskListener(TaskConfig):
 
         await start_from_queued()
         await sleep(3)
-        await clean_download(self.dir)
+        if not getattr(self, "bq_remove_torrent_keep_files", False):
+            await clean_download(self.dir)
         if self.up_dir:
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):

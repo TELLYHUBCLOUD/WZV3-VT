@@ -1414,6 +1414,8 @@ def _clean_title_from_filename(filename):
         stem,
         flags=re.IGNORECASE,
     )
+    stem = re.sub(r"^[^\w\[\(]{1,12}\s*[-_. ]+", "", stem, flags=re.UNICODE)
+    stem = re.sub(r"^[A-Z0-9]{1,8}\s*[-_. ]+(?=\[?[Ss]\d{1,2}[Ee]\d{1,4}\]?)", "", stem)
     stem = re.sub(r"(?:^|\s)-\s*[A-Za-z0-9][A-Za-z0-9._-]{1,30}$", "", stem)
     title = re.sub(r"[\[\](){}]", " ", stem)
     title = title.replace(".", " ").replace("_", " ").replace("-", " ")
@@ -2287,6 +2289,24 @@ def _final_clean(title):
     return title
 
 
+def _strip_poster_search_prefix(title):
+    title = str(title or "")
+    uploader_pattern = "|".join(re.escape(tag) for tag in UPLOADER_TAGS)
+    title = re.sub(
+        rf"^\s*\[(?:{uploader_pattern})\]\s*[-_. ]*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+    title = re.sub(r"^\s*[^\w\[\(]{1,12}\s*[-_. ]+", "", title, flags=re.UNICODE)
+    title = re.sub(
+        r"^\s*[A-Z0-9]{1,8}\s*[-_. ]+(?=\[?[Ss]\d{1,2}[\s._-]*[Ee]\d{1,4}\]?)",
+        "",
+        title,
+    )
+    return title.strip(" -._")
+
+
 def format_clean_poster_title(raw_title, rename_regex=None):
     """Clean a raw filename into a search-friendly metadata lookup title.
 
@@ -2301,6 +2321,7 @@ def format_clean_poster_title(raw_title, rename_regex=None):
             raw_title = apply_regex_rename(raw_title, rename_regex)
         except Exception as e:
             LOGGER.warning(f"Failed to apply regex clean to TMDb title: {e}")
+    raw_title = _strip_poster_search_prefix(raw_title)
 
     normalized = re.sub(r"https?://\S+", " ", raw_title)
     normalized = re.sub(r"\bt(?:elegram)?\.me/\S+", " ", normalized, flags=re.IGNORECASE)

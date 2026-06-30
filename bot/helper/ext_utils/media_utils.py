@@ -1025,6 +1025,19 @@ def _thumb_quality():
     return max(1, min(quality, 100))
 
 
+def _extract_bit_tag(*values):
+    source = " ".join(str(value or "") for value in values)
+    bit_match = re.search(
+        r"(?<!\d)(8|10|12)\s*[-_.]?\s*bit\b|\bhi\s*(8|10|12)\s*p\b|\bmain\s*(10|12)\b",
+        source,
+        re.IGNORECASE,
+    )
+    if not bit_match:
+        return ""
+    bit_value = next((group for group in bit_match.groups() if group), "")
+    return "" if bit_value == "8" else f"{bit_value}bit"
+
+
 def _sanitize_filename(name, fallback):
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(name or ""))
     name = re.sub(r"\s+", " ", name).strip(" .-_")
@@ -1478,10 +1491,9 @@ async def _extract_stream_rename_info(filepath):
             )
             pix_fmt = str(stream.get("pix_fmt") or "")
             profile = str(stream.get("profile") or "")
-            bit_source = f"{bit_depth} {pix_fmt} {profile}"
-            bit_match = re.search(r"\b(8|10|12)\b", bit_source)
-            if bit_match and bit_match.group(1) != "8" and not info.get("bit"):
-                info["bit"] = f"{bit_match.group(1)}bit"
+            bit_tag = _extract_bit_tag(bit_depth, pix_fmt, profile)
+            if bit_tag and not info.get("bit"):
+                info["bit"] = bit_tag
             dyn_source = " ".join(
                 str(stream.get(k, ""))
                 for k in ("color_transfer", "color_primaries", "pix_fmt", "profile")
@@ -2139,11 +2151,9 @@ async def extract_metadata_from_filename(filename, filepath=None):
     if _has_ds4k(filename):
         metadata["DS4K"] = "DS4K"
 
-    bit_match = re.search(r"\b(8|10|12)[-\s.]?bit\b|\bHi(8|10|12)P\b", filename, re.IGNORECASE)
-    if bit_match:
-        bit_value = bit_match.group(1) or bit_match.group(2)
-        if bit_value != "8":
-            metadata["bit"] = f"{bit_value}bit"
+    bit_tag = _extract_bit_tag(filename)
+    if bit_tag:
+        metadata["bit"] = bit_tag
 
     metadata["ott"] = _extract_ott_tag(filename)
     metadata["lib"] = _extract_release_group(filename)

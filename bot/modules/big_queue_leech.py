@@ -20,7 +20,6 @@ from ..helper.telegram_helper.message_utils import edit_message, send_message
 from .batch_task_registry import (
     BatchTaskController,
     finish_batch_plan,
-    get_batch_limits,
     save_batch_plan,
     update_batch_plan,
 )
@@ -198,7 +197,6 @@ async def bq_leech(client, message):
         from .mirror_leech import Mirror
 
         all_ids = [str(item.index) for item in files]
-        dl_limit, up_limit = get_batch_limits("bqleech")
         active = []
         next_batch = int(getattr(message, "bq_resume_index", 0) or 0)
         if next_batch:
@@ -226,7 +224,7 @@ async def bq_leech(client, message):
             while (
                 next_batch < len(batches)
                 and active_downloads < 1
-                and active_uploads < up_limit
+                and active_uploads < 1
                 and not controller.cancelled
             ):
                 batch_no = next_batch + 1

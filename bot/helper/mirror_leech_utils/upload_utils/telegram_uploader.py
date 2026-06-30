@@ -504,6 +504,8 @@ class TelegramUploader:
                     if self._listener.is_cancelled:
                         return
                     cap_mono = await self._prepare_file(file_, dirpath)
+                    f_path = self._up_path
+                    file_ = ospath.basename(self._up_path)
                     if self._last_msg_in_group:
                         group_lists = [
                             x for v in self._media_dict.values() for x in v.keys()
@@ -624,6 +626,7 @@ class TelegramUploader:
                 width=width,
                 height=height,
                 thumb=thumb,
+                cover=thumb,
                 supports_streaming=True,
                 **common,
             )

@@ -78,7 +78,7 @@ async def _add_metadata_torrent(source, tag):
     await TorrentManager.qbittorrent.torrents.add(form.build())
 
     tor = None
-    for _ in range(120):
+    for _ in range(300):
         info = await TorrentManager.qbittorrent.torrents.info(tag=tag)
         if info:
             tor = info[0]
@@ -87,7 +87,7 @@ async def _add_metadata_torrent(source, tag):
                 if files:
                     return tor, files, plan_dir
         await sleep(1)
-    raise RuntimeError("qB metadata was not ready within 120 seconds.")
+    raise RuntimeError("qB metadata was not ready within 300 seconds.")
 
 
 async def _cleanup_metadata_torrent(tor, tag, plan_dir):

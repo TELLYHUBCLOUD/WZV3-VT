@@ -289,6 +289,13 @@ def _first_image(data):
 def _hanime_title_from_data(slug, data):
     hv = data.get("hentai_video") if isinstance(data, dict) else {}
     hv = hv if isinstance(hv, dict) else {}
+    title = ""
+    for key in ("name", "title", "display_name", "video_title"):
+        value = hv.get(key) if hv else None
+        if isinstance(value, str) and value.strip():
+            title = value.strip()
+            break
+
     slug_title = re.sub(r"[-_]+", " ", slug or "").strip()
     slug_title = re.sub(r"\s+", " ", slug_title).title()
     slug_episode = ""
@@ -298,13 +305,8 @@ def _hanime_title_from_data(slug, data):
             slug_episode = episode_match.group(1)
             slug_title = slug_title[: episode_match.start()].strip()
 
-    title = slug_title
     if not title:
-        for key in ("name", "title", "display_name", "video_title", "slug"):
-            value = hv.get(key) if hv else None
-            if isinstance(value, str) and value.strip():
-                title = re.sub(r"[-_]+", " ", value.strip()).title()
-                break
+        title = slug_title
 
     episode = ""
     for key in ("episode_number", "episode", "ep", "number"):
@@ -479,11 +481,11 @@ async def resolve_hanime(link, options=None):
         data = await _hanime_local_resolve(link)
 
     slug = data.get("slug") or _hanime_slug(link)
-    if slug:
+    if slug and (not data.get("title") or not data.get("thumbnail")):
         video_data = {}
         if not data.get("title") or not data.get("thumbnail"):
             video_data = await _hanime_video_data(slug)
-        data["title"] = _hanime_title_from_data(slug, video_data)
+        data["title"] = data.get("title") or _hanime_title_from_data(slug, video_data)
         if video_data:
             data["thumbnail"] = data.get("thumbnail") or _first_image(video_data)
     title = data.get("title") or slug.replace("-", " ").title() or "Hanime Video"

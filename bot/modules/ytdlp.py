@@ -804,11 +804,12 @@ class YtDlp(TaskListener):
             self.link = selected["link"]
             qual = selected["qual"]
             if selected.get("site") == "hanime":
-                self.force_anime_thumbnail = True
+                self.skip_auto_rename = True
+                self.skip_auto_thumbnail = True
             if selected.get("name") and not self.name:
                 self.name = selected["name"]
                 self.custom_name = selected["name"]
-            if selected.get("thumb") and not self.thumb and selected.get("site") != "hanime":
+            if selected.get("thumb") and not self.thumb:
                 thumb = selected["thumb"]
                 if isinstance(thumb, str) and thumb.startswith(("http://", "https://")):
                     thumb = await download_image_thumb(thumb, landscape=True)

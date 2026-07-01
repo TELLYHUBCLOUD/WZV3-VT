@@ -213,6 +213,8 @@ class TelegramUploader:
         )
         if auto_process_enabled:
             autorename_enabled = bool(autorename_enabled)
+        if getattr(self._listener, "skip_auto_rename", False):
+            autorename_enabled = False
 
         merge_range_name = re_match(r"^\[S\d+-EP\(\d+-\d+\)\]", file_, IGNORECASE)
 
@@ -686,6 +688,8 @@ class TelegramUploader:
                     if "AUTO_THUMBNAIL" in self._listener.user_dict
                     else Config.AUTO_THUMBNAIL
                 )
+                if getattr(self._listener, "skip_auto_thumbnail", False):
+                    auto_thumb_enabled = False
                 if auto_thumb_enabled:
                     LOGGER.info(f"Auto-thumbnail enabled for: {file}")
                     try:

@@ -22,6 +22,10 @@ STREAMWISH_API = ""
 EXCLUDED_EXTENSIONS = ""
 INCOMPLETE_TASK_NOTIFIER = False
 YT_DLP_OPTIONS = ""
+MX_PLAYER_API_BASE = "https://ott.dkbotzpro.in/mxplayer?url={url}"
+HANIME_API_BASE = ""  # Empty uses local resolver. Or set your API endpoint, e.g. https://host/hanime-api
+SITE_QUALITY_SELECTOR_TIMEOUT = 120
+MX_DEFAULT_AUDIO = "ask"  # ask, all, skip/none, or comma languages like hin,tam,eng
 USE_SERVICE_ACCOUNTS = False
 NAME_SWAP = ""
 FFMPEG_CMDS = {

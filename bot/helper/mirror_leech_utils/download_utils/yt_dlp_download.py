@@ -150,16 +150,26 @@ class YoutubeDLHelper:
         async_to_sync(self._listener.on_download_error, error)
 
     def _extract_meta_data(self):
-        if self._listener.link.startswith(("rtmp", "mms", "rstp", "rtmps")):
+        link_for_meta = (
+            self._listener.link[0]
+            if isinstance(self._listener.link, list)
+            else self._listener.link
+        )
+        if isinstance(link_for_meta, str) and link_for_meta.startswith(
+            ("rtmp", "mms", "rstp", "rtmps")
+        ):
             self.opts["external_downloader"] = BinConfig.FFMPEG_NAME
         with YoutubeDL(self.opts) as ydl:
             try:
-                result = ydl.extract_info(self._listener.link, download=False)
+                result = ydl.extract_info(link_for_meta, download=False)
                 if result is None:
                     raise ValueError("Info result is None")
             except Exception as e:
                 return self._on_download_error(str(e))
-            if self.is_playlist:
+            if isinstance(self._listener.link, list):
+                self.is_playlist = True
+                self.playlist_count = len(self._listener.link)
+            elif self.is_playlist:
                 self.playlist_count = result.get("playlist_count", 0)
             if "entries" in result:
                 for entry in result["entries"]:
@@ -190,7 +200,12 @@ class YoutubeDLHelper:
         with suppress(Exception):
             with YoutubeDL(self.opts) as ydl:
                 try:
-                    ydl.download([self._listener.link])
+                    links = (
+                        self._listener.link
+                        if isinstance(self._listener.link, list)
+                        else [self._listener.link]
+                    )
+                    ydl.download(links)
                 except DownloadError as e:
                     if not self._listener.is_cancelled:
                         self._on_download_error(str(e))
@@ -267,7 +282,12 @@ class YoutubeDLHelper:
             base_name = ospath.splitext(self._listener.name)[0]
 
         start_path = path if self.keep_thumb else f"{path}/yt-dlp-thumb"
-        if self.is_playlist:
+        if isinstance(self._listener.link, list):
+            self.opts["outtmpl"] = {
+                "default": f"{path}/{base_name}/%(title,fulltitle,alt_title,id)s.%(ext)s",
+                "thumbnail": f"{start_path}/%(title,fulltitle,alt_title,id)s.%(ext)s",
+            }
+        elif self.is_playlist:
             self.opts["outtmpl"] = {
                 "default": f"{path}/{self._listener.name}/%(title,fulltitle,alt_title)s%(season_number& |)s%(season_number&S|)s%(season_number|)02d%(episode_number&E|)s%(episode_number|)02d%(height& |)s%(height|)s%(height&p|)s%(fps|)s%(fps&fps|)s%(tbr& |)s%(tbr|)d.%(ext)s",
                 "thumbnail": f"{start_path}/%(title,fulltitle,alt_title)s%(season_number& |)s%(season_number&S|)s%(season_number|)02d%(episode_number&E|)s%(episode_number|)02d%(height& |)s%(height|)s%(height&p|)s%(fps|)s%(fps&fps|)s%(tbr& |)s%(tbr|)d.%(ext)s",

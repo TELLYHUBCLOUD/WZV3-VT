@@ -34,6 +34,7 @@ RUN sed -i 's/Components: main/Components: main contrib non-free/g' /etc/apt/sou
         mediainfo \
         mktorrent \
         netcat-openbsd \
+        nodejs \
         p7zip-full \
         par2 \
         pkg-config \

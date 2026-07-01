@@ -1,4 +1,4 @@
-from asyncio import Event, sleep
+from asyncio import FIRST_COMPLETED, Event, create_task, sleep, wait
 from html import escape
 from re import sub
 
@@ -52,9 +52,8 @@ def _clean_filename_part(value):
 
 def _hanime_filename(metadata, quality):
     title = _clean_filename_part(metadata.get("title") or "Hanime Video")
-    episode = _clean_filename_part(metadata.get("episode") or "00")
     quality = _clean_filename_part(quality or "best")
-    return f"🄰🅂- {title} Episode {episode} [{quality}] ~ [@Anime_Starfall🥰].mkv"
+    return f"🄰🅂- {title} [{quality}] ~ [@Anime_Starfall🥰].mkv"
 
 
 async def _send_hanime_poster(message, metadata):
@@ -107,7 +106,7 @@ async def _run_hanime_quality(client, message, controller, source_url, metadata,
     task_msg = await client.get_messages(chat_id=task_msg.chat.id, message_ids=task_msg.id)
     task_msg.text = (
         f"/{BotCommands.YtdlLeechCommand[0]} {source_url}{up_arg} "
-        f"-opt {opt!r} -n {filename}"
+        f"-fd -opt {opt!r} -n {filename}"
     )
     if message.from_user:
         task_msg.from_user = message.from_user
@@ -136,6 +135,37 @@ async def _run_hanime_quality(client, message, controller, source_url, metadata,
         done_event.set()
     await done_event.wait()
     return getattr(worker, "bq_result", "")
+
+
+async def _run_hanime_streams(client, message, controller, source_url, metadata):
+    streams = list(metadata.get("streams") or [])
+    active = set()
+    index = 0
+    max_parallel = 3
+    while (index < len(streams) or active) and not controller.cancelled:
+        while index < len(streams) and len(active) < max_parallel and not controller.cancelled:
+            active.add(
+                create_task(
+                    _run_hanime_quality(
+                        client, message, controller, source_url, metadata, streams[index]
+                    )
+                )
+            )
+            index += 1
+            await sleep(0.5)
+        if not active:
+            break
+        done, active = await wait(active, return_when=FIRST_COMPLETED)
+        for task in done:
+            try:
+                result = task.result()
+                if result and result != "complete":
+                    LOGGER.warning(f"Hanime quality task ended with: {result}")
+            except Exception as e:
+                LOGGER.error(f"Hanime quality task failed: {e}", exc_info=True)
+
+    for task in active:
+        task.cancel()
 
 
 @new_task
@@ -191,15 +221,7 @@ async def hanime_letter_leech(client, message):
                             ),
                         )
                         await _send_hanime_poster(message, metadata)
-                        for stream in metadata.get("streams") or []:
-                            if controller.cancelled:
-                                break
-                            result = await _run_hanime_quality(
-                                client, message, controller, source_url, metadata, stream
-                            )
-                            if result and result != "complete":
-                                LOGGER.warning(f"Hanime quality task ended with: {result}")
-                            await sleep(1)
+                        await _run_hanime_streams(client, message, controller, source_url, metadata)
                     except Exception as e:
                         LOGGER.error(f"Hanime letter item failed: {source_url}: {e}", exc_info=True)
                         await send_message(

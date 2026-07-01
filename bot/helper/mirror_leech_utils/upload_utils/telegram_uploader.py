@@ -35,6 +35,7 @@ from ....core.config_manager import Config
 from ....core.tg_client import TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
+from ...ext_utils.hanime_state import hanime_upload_slot
 from ...ext_utils.performance import get_tg_copy_delay, get_tg_flood_wait_multiplier
 from ...ext_utils.starfallx_upload import (
     private_dump_only,
@@ -481,6 +482,10 @@ class TelegramUploader:
                 )
 
     async def upload(self):
+        async with hanime_upload_slot(getattr(self._listener, "hanime_letter_leech", False)):
+            return await self._upload_unlocked()
+
+    async def _upload_unlocked(self):
         await self._user_settings()
         res = await self._msg_to_reply()
         if not res:

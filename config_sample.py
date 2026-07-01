@@ -30,7 +30,7 @@ HANIME_LETTER = ""  # Owner-only reserved bulk letter, example: A
 HANIME_DUMP_CHAT = ""  # Owner-only reserved dump channel/chat id
 HANIME_UPLOAD_BOT_TOKEN = ""  # Owner-only reserved upload bot token
 HANIME_DOWNLOAD = False  # Owner-only reserved switch for Hanime bulk automation
-HANIME_POST_TEMPLATE = """<b>{title} - {episode}</b>
+HANIME_POST_TEMPLATE = """<b>{title}</b>
 
 ‣ Views : <code>{views}</code>
 ‣ Downloads : <code>{downloads}</code>

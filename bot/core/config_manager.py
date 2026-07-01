@@ -59,7 +59,7 @@ class Config:
     HANIME_UPLOAD_BOT_TOKEN = ""
     HANIME_DOWNLOAD = False
     HANIME_POST_TEMPLATE = (
-        "<b>{title} - {episode}</b>\n\n"
+        "<b>{title}</b>\n\n"
         "‣ Views : <code>{views}</code>\n"
         "‣ Downloads : <code>{downloads}</code>\n"
         "‣ Rank : <code>{rank}</code>\n"

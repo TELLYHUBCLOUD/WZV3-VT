@@ -4,6 +4,7 @@ from time import time
 
 
 _hanime_bulk_lock = Lock()
+_hanime_upload_lock = Lock()
 _hanime_bulk = {"active": False, "owner_id": 0, "letter": "", "started": 0}
 
 
@@ -35,3 +36,12 @@ async def hanime_bulk_run(owner_id, letter):
             _hanime_bulk.update(
                 {"active": False, "owner_id": 0, "letter": "", "started": 0}
             )
+
+
+@asynccontextmanager
+async def hanime_upload_slot(enabled=True):
+    if not enabled:
+        yield
+        return
+    async with _hanime_upload_lock:
+        yield

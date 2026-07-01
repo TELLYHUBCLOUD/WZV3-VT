@@ -89,16 +89,15 @@ def _render(metadata, image_bytes, output_path):
         draw.text((58, y), line, fill=(220, 220, 220), font=_font(24))
         y += 32
 
-    inset = _contain(src, (330, 500))
-    x = 1280 - inset.width - 58
-    y = 86
+    inset = _contain(src, (420, 620))
+    x = 1280 - inset.width - 48
+    y = max(48, (720 - inset.height) // 2)
     shadow = Image.new("RGBA", (inset.width + 18, inset.height + 18), (0, 0, 0, 115))
     canvas.alpha_composite(shadow, (x - 9, y + 9))
     canvas.paste(inset, (x, y))
     draw.rectangle((x, y, x + inset.width, y + inset.height), outline=(255, 255, 255), width=4)
 
-    draw.rounded_rectangle((1002, 636, 1225, 684), radius=8, fill=(255, 255, 255, 42))
-    draw.text((1022, 648), brand, fill=(255, 255, 255), font=_font(25, True))
+    draw.text((1040, 650), brand, fill=(255, 255, 255), font=_font(25, True))
     canvas.convert("RGB").save(output_path, "JPEG", quality=93, optimize=True)
     return output_path
 
@@ -138,9 +137,12 @@ def build_hanime_caption(metadata):
         "synopsis": synopsis,
     }
     safe_values = {key: escape(str(value), quote=False) for key, value in values.items()}
-    template = getattr(Config, "HANIME_POST_TEMPLATE", "") or "{title} - {episode}"
+    template = getattr(Config, "HANIME_POST_TEMPLATE", "") or "{title}"
+    template = template.replace("{title} - {episode}", "{title}")
+    template = template.replace("{title}-{episode}", "{title}")
+    template = template.replace("Episode {episode}", "").replace("episode {episode}", "")
     try:
         return template.format_map(safe_values)
     except Exception as e:
         LOGGER.warning(f"Hanime caption template failed: {e}")
-        return f"<b>{safe_values['title']} - {safe_values['episode']}</b>"
+        return f"<b>{safe_values['title']}</b>"

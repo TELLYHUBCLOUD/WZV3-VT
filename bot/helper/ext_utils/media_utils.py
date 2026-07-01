@@ -1421,6 +1421,14 @@ def _clean_title_from_filename(filename):
     title = title.replace(".", " ").replace("_", " ").replace("-", " ")
     title = re.sub(r"\s+", " ", title).strip()
 
+    merge_range = re.search(
+        r"^\s*[Ss]0*\d{1,2}\s*EP\s*\d{1,4}\s+\d{1,4}\s+",
+        title,
+        re.IGNORECASE,
+    )
+    if merge_range:
+        title = title[merge_range.end():].strip()
+
     sxe = re.search(
         r"(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s._-]*[Ee]0*(\d{1,4})(?![A-Za-z0-9])",
         title,
@@ -2332,12 +2340,19 @@ def format_clean_poster_title(raw_title, rename_regex=None):
 
     season = None
     year = None
+    merge_season_match = re.search(
+        r"(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s._-]*EP\s*\(?\d{1,4}",
+        normalized,
+        re.IGNORECASE,
+    )
+    if merge_season_match:
+        season = f"Season {int(merge_season_match.group(1))}"
     season_match = re.search(
         r"(?<![A-Za-z0-9])(?:Season\s*|S)0*(\d{1,2})(?:\s*E\d{1,4})?(?![A-Za-z0-9])",
         normalized,
         re.IGNORECASE,
     )
-    if season_match:
+    if season_match and not season:
         season = f"Season {int(season_match.group(1))}"
     year_match = re.search(r"\b(19\d{2}|20[0-3]\d)\b", normalized)
     if year_match:

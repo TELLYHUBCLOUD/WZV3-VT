@@ -32,6 +32,7 @@ from .ext_utils.files_utils import (
     is_archive,
     is_archive_split,
     is_first_archive_split,
+    is_supported_archive,
     split_file,
 )
 from .ext_utils.links_utils import (
@@ -683,17 +684,13 @@ class TaskConfig:
     async def proceed_extract(self, dl_path, gid):
         pswd = self.extract if isinstance(self.extract, str) else ""
         self.files_to_proceed = []
-        if self.is_file and is_archive(dl_path):
+        if self.is_file and await is_supported_archive(dl_path):
             self.files_to_proceed.append(dl_path)
         else:
             for dirpath, _, files in await sync_to_async(walk, dl_path, topdown=False):
                 for file_ in files:
-                    if (
-                        is_first_archive_split(file_)
-                        or is_archive(file_)
-                        and not file_.strip().lower().endswith(".rar")
-                    ):
-                        f_path = ospath.join(dirpath, file_)
+                    f_path = ospath.join(dirpath, file_)
+                    if await is_supported_archive(f_path) and not file_.strip().lower().endswith(".rar"):
                         self.files_to_proceed.append(f_path)
 
         if not self.files_to_proceed:
@@ -709,14 +706,16 @@ class TaskConfig:
             for file_ in files:
                 if self.is_cancelled:
                     return False
-                if (
-                    is_first_archive_split(file_)
-                    or is_archive(file_)
-                    and not file_.strip().lower().endswith(".rar")
-                ):
+                f_path = ospath.join(dirpath, file_)
+                if await is_supported_archive(f_path) and not file_.strip().lower().endswith(".rar"):
                     self.proceed_count += 1
-                    f_path = ospath.join(dirpath, file_)
-                    t_path = get_base_name(f_path) if self.is_file else dirpath
+                    if self.is_file:
+                        try:
+                            t_path = get_base_name(f_path)
+                        except Exception:
+                            t_path = f"{f_path}_extracted"
+                    else:
+                        t_path = dirpath
                     if not self.is_file:
                         self.subname = file_
                     code = await sevenz.extract(f_path, t_path, pswd)

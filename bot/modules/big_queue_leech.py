@@ -67,14 +67,15 @@ async def _add_metadata_torrent(source, tag):
     plan_dir = f"{DOWNLOAD_DIR}bqleech_plan_{tag}"
     await makedirs(plan_dir, exist_ok=True)
     form = AddFormBuilder.with_client(TorrentManager.qbittorrent)
-    if await aiopath.exists(source):
+    source_is_file = await aiopath.exists(source)
+    if source_is_file:
         from aiofiles import open as aiopen
 
         async with aiopen(source, "rb") as f:
             form = form.include_file(await f.read())
     else:
         form = form.include_url(source)
-    form = form.savepath(plan_dir).tags([tag]).stopped(True)
+    form = form.savepath(plan_dir).tags([tag]).stopped(source_is_file)
     await TorrentManager.qbittorrent.torrents.add(form.build())
 
     tor = None

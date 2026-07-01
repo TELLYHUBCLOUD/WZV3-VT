@@ -108,6 +108,33 @@ def is_archive_split(file):
     return bool(re_search(SPLIT_REGEX, file.lower(), I))
 
 
+async def is_supported_archive(file):
+    if is_first_archive_split(file) or is_archive(file):
+        return True
+    if is_archive_split(file) or not await aiopath.isfile(file):
+        return False
+
+    archive_mimes = {
+        "application/gzip",
+        "application/java-archive",
+        "application/vnd.rar",
+        "application/x-7z-compressed",
+        "application/x-bzip2",
+        "application/x-gzip",
+        "application/x-lzma",
+        "application/x-rar",
+        "application/x-rar-compressed",
+        "application/x-tar",
+        "application/x-xz",
+        "application/zip",
+    }
+    try:
+        mime = await sync_to_async(Magic(mime=True).from_file, file)
+        return mime in archive_mimes
+    except Exception:
+        return False
+
+
 async def clean_target(opath):
     if await aiopath.exists(opath):
         LOGGER.info(f"Cleaning Target: {opath}")

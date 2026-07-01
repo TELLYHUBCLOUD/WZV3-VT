@@ -2,16 +2,17 @@ import hashlib
 import os
 import re
 import tempfile
-from asyncio import create_subprocess_exec, sleep, wait_for
+from asyncio import create_subprocess_exec, sleep, to_thread, wait_for
+from logging import getLogger
 from time import time
 from urllib.parse import quote
 
 from httpx import AsyncClient
 from yt_dlp import YoutubeDL
 
-from ... import LOGGER
 from ...core.config_manager import Config
-from .bot_utils import sync_to_async
+
+LOGGER = getLogger(__name__)
 
 HANIME_RE = re.compile(r"https?://(?:www\.)?hanime\.tv/videos/hentai/([^/?#\s]+)", re.I)
 MX_RE = re.compile(r"https?://(?:www\.)?(?:mxplayer\.in|mxplay\.com)/\S+", re.I)
@@ -80,53 +81,7 @@ def _extract_formats(download_url):
         return ydl.extract_info(download_url, download=False) or {}
 
 
-async def resolve_external_site(link, options=None):
-    options = options or {}
-    if is_mx_link(link):
-        return await resolve_mx(link, options)
-    if is_hanime_link(link):
-        return await resolve_hanime(link, options)
-    return None
-
-
-async def resolve_mx(link, options=None):
-    options = options or {}
-    api_base = (
-        options.get("mx_api_base")
-        or options.get("MX_PLAYER_API_BASE")
-        or Config.MX_PLAYER_API_BASE
-    )
-    if not api_base:
-        raise ValueError("MX_PLAYER_API_BASE is not configured.")
-
-    api_url = (
-        api_base.format(url=quote(link, safe=""))
-        if "{url}" in api_base
-        else f"{api_base.rstrip('/')}?url={quote(link, safe='')}"
-    )
-    data = None
-    async with AsyncClient(timeout=30) as client:
-        for attempt in range(3):
-            try:
-                resp = await client.get(api_url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    break
-                LOGGER.warning(f"MX resolver returned HTTP {resp.status_code}")
-            except Exception as e:
-                LOGGER.warning(f"MX resolver attempt {attempt + 1} failed: {e}")
-            await sleep(1)
-
-    if not data:
-        raise ValueError("MX resolver did not return data.")
-    if data.get("status") is False:
-        raise ValueError(data.get("message") or "MX resolver failed.")
-
-    download_url = data.get("m3u8_url") or data.get("mpd_url")
-    if not download_url:
-        raise ValueError("MX resolver did not return m3u8_url or mpd_url.")
-
-    info = await sync_to_async(_extract_formats, download_url)
+def _formats_from_info(info):
     videos = []
     audios = []
     for fmt in info.get("formats") or []:
@@ -164,9 +119,64 @@ async def resolve_mx(link, options=None):
                     "abr": abr or 0,
                 }
             )
+    return (
+        sorted(_unique_formats(videos), key=lambda item: item["height"], reverse=True),
+        _unique_formats(audios),
+    )
 
-    videos = sorted(_unique_formats(videos), key=lambda item: item["height"], reverse=True)
-    audios = _unique_formats(audios)
+
+def _is_internal_base(api_base):
+    return str(api_base or "").strip().lower() in {"", "internal", "local", "builtin"}
+
+
+async def resolve_external_site(link, options=None):
+    options = options or {}
+    if is_mx_link(link):
+        return await resolve_mx(link, options)
+    if is_hanime_link(link):
+        return await resolve_hanime(link, options)
+    return None
+
+
+async def resolve_mx(link, options=None):
+    options = options or {}
+    api_base = (
+        options.get("mx_api_base")
+        or options.get("MX_PLAYER_API_BASE")
+        or Config.MX_PLAYER_API_BASE
+    )
+    if _is_internal_base(api_base):
+        return await _resolve_mx_direct(link)
+
+    api_url = (
+        api_base.format(url=quote(link, safe=""))
+        if "{url}" in api_base
+        else f"{api_base.rstrip('/')}?url={quote(link, safe='')}"
+    )
+    data = None
+    async with AsyncClient(timeout=30) as client:
+        for attempt in range(3):
+            try:
+                resp = await client.get(api_url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    break
+                LOGGER.warning(f"MX resolver returned HTTP {resp.status_code}")
+            except Exception as e:
+                LOGGER.warning(f"MX resolver attempt {attempt + 1} failed: {e}")
+            await sleep(1)
+
+    if not data:
+        raise ValueError("MX resolver did not return data.")
+    if data.get("status") is False:
+        raise ValueError(data.get("message") or "MX resolver failed.")
+
+    download_url = data.get("m3u8_url") or data.get("mpd_url")
+    if not download_url:
+        raise ValueError("MX resolver did not return m3u8_url or mpd_url.")
+
+    info = await to_thread(_extract_formats, download_url)
+    videos, audios = _formats_from_info(info)
     if not videos and not audios:
         raise ValueError("MX formats were not readable by yt-dlp.")
 
@@ -177,6 +187,23 @@ async def resolve_mx(link, options=None):
         "title": data.get("full_title") or data.get("title") or info.get("title") or "MX Player Video",
         "description": data.get("description") or "",
         "thumbnail": data.get("thumbnail") or info.get("thumbnail") or "",
+        "videos": videos,
+        "audios": audios,
+    }
+
+
+async def _resolve_mx_direct(link):
+    info = await to_thread(_extract_formats, link)
+    videos, audios = _formats_from_info(info)
+    if not videos and not audios:
+        raise ValueError("MX formats were not readable by yt-dlp internal resolver.")
+    return {
+        "type": "mx",
+        "source_url": link,
+        "download_url": link,
+        "title": info.get("title") or info.get("fulltitle") or "MX Player Video",
+        "description": info.get("description") or "",
+        "thumbnail": info.get("thumbnail") or "",
         "videos": videos,
         "audios": audios,
     }
@@ -348,7 +375,7 @@ async def resolve_hanime(link, options=None):
         or options.get("HANIME_API_BASE")
         or Config.HANIME_API_BASE
     )
-    if api_base:
+    if not _is_internal_base(api_base):
         data = await _hanime_api_resolve(link, api_base)
     else:
         data = await _hanime_local_resolve(link)

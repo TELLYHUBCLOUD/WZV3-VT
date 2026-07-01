@@ -245,6 +245,53 @@ async def files(request: Request):
     return response
 
 
+@app.get("/mxplayer")
+async def mxplayer_api(url: str):
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+    try:
+        from bot.helper.ext_utils.site_resolvers import resolve_mx
+
+        data = await resolve_mx(url, {"MX_PLAYER_API_BASE": "internal"})
+        return JSONResponse(
+            {
+                "status": True,
+                "source_url": data.get("source_url", url),
+                "download_url": data.get("download_url", url),
+                "m3u8_url": data.get("download_url", url),
+                "full_title": data.get("title") or "MX Player Video",
+                "description": data.get("description") or "",
+                "thumbnail": data.get("thumbnail") or "",
+                "videos": data.get("videos") or [],
+                "audios": data.get("audios") or [],
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.get("/hanime-api")
+async def hanime_api(url: str):
+    if not url:
+        raise HTTPException(status_code=400, detail="url is required")
+    try:
+        from bot.helper.ext_utils.site_resolvers import resolve_hanime
+
+        data = await resolve_hanime(url, {"HANIME_API_BASE": "internal"})
+        streams = data.get("streams") or []
+        return JSONResponse(
+            {
+                "slug": url.rstrip("/").split("/")[-1],
+                "title": data.get("title") or "Hanime Video",
+                "thumbnail": data.get("thumbnail") or "",
+                "best": streams[0]["url"] if streams else "",
+                "streams": streams,
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
 @app.api_route(
     "/app/files/torrent", methods=["GET", "POST"], response_class=HTMLResponse
 )

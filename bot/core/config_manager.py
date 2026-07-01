@@ -50,8 +50,8 @@ class Config:
     DISABLE_RSS = False
     DISABLE_SEARCH = False
     DISABLE_YTDLP = False
-    MX_PLAYER_API_BASE = "https://ott.dkbotzpro.in/mxplayer?url={url}"
-    HANIME_API_BASE = ""
+    MX_PLAYER_API_BASE = "internal"
+    HANIME_API_BASE = "internal"
     SITE_QUALITY_SELECTOR_TIMEOUT = 120
     MX_DEFAULT_AUDIO = "ask"
     EQUAL_SPLITS = False

@@ -691,6 +691,8 @@ class TelegramUploader:
                     try:
                         as_doc = self._listener.as_doc
                         custom_name = getattr(self._listener, "custom_name", "")
+                        thumb_lookup_name = custom_name or file
+                        force_anime_thumb = getattr(self._listener, "force_anime_thumbnail", False)
                         rename_regex = (
                             self._listener.user_dict.get("lremname_regex")
                             or Config.LEECH_FILENAME_REMNAME_REGEX
@@ -698,9 +700,10 @@ class TelegramUploader:
                         if is_video:
                             thumb = await get_anime_landscape_thumbnail(
                                 self._up_path,
-                                custom_name or file,
+                                thumb_lookup_name,
                                 None,
                                 rename_regex,
+                                force_anime_thumb,
                             )
                         if thumb is None:
                             poster_url = await get_final_poster_url(

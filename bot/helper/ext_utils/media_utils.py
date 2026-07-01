@@ -1648,7 +1648,31 @@ def _looks_like_anime_name(filename, title):
         "b-global",
     )
     text = f"{filename} {title}".lower()
-    return any(token in text for token in anime_tokens)
+    if any(token in text for token in anime_tokens):
+        return True
+    title_words = set(re.findall(r"[a-z0-9]+", str(title).lower()))
+    romanized_particles = {
+        "chan",
+        "de",
+        "ga",
+        "kara",
+        "kun",
+        "made",
+        "na",
+        "ni",
+        "no",
+        "san",
+        "sensei",
+        "senpai",
+        "to",
+        "wa",
+        "wo",
+    }
+    episode_hint = re.search(
+        r"(?i)(?:\b(?:ep|episode|e)\s*0*\d{1,4}\b|\s-\s*0*\d{1,4}(?=[\s\._-]|$))",
+        str(filename),
+    )
+    return bool(episode_hint and title_words & romanized_particles)
 
 
 async def _resolve_tmdb_title(title, year=None):
@@ -1944,6 +1968,7 @@ async def _resolve_media_title(title, filename, year=None):
         mal_title = await _resolve_mal_title(title)
         if mal_title:
             return mal_title
+        return title
     tmdb_title = await _resolve_tmdb_title(title, year)
     if tmdb_title:
         return tmdb_title
@@ -2664,12 +2689,17 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
     return None
 
 
-async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None, rename_regex=None):
+async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None, rename_regex=None, force=False):
     title, _, _ = format_clean_poster_title(raw_filename, rename_regex)
-    if not _looks_like_anime_name(raw_filename, title):
+    if not force and not _looks_like_anime_name(raw_filename, title):
         return None
 
-    poster_url = await get_final_poster_url(raw_filename, as_doc=False, rename_regex=rename_regex)
+    poster_url = (
+        await get_anilist_poster_link(title, as_doc=False)
+        or await get_mal_poster_link(title, as_doc=False)
+        or await get_kitsu_poster_link(title, as_doc=False)
+        or await get_final_poster_url(raw_filename, as_doc=False, rename_regex=rename_regex)
+    )
     if poster_url:
         thumb = await download_image_thumb(poster_url, landscape=True)
         if thumb:

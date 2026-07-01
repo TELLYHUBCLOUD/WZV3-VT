@@ -289,18 +289,33 @@ def _first_image(data):
 def _hanime_title_from_data(slug, data):
     hv = data.get("hentai_video") if isinstance(data, dict) else {}
     hv = hv if isinstance(hv, dict) else {}
-    title = _first_text(
-        hv or data,
-        ("name", "title", "display_name", "video_title", "slug"),
-    )
+    slug_title = re.sub(r"[-_]+", " ", slug or "").strip()
+    slug_title = re.sub(r"\s+", " ", slug_title).title()
+    slug_episode = ""
+    if slug_title:
+        episode_match = re.search(r"\s+(\d{1,4})$", slug_title)
+        if episode_match:
+            slug_episode = episode_match.group(1)
+            slug_title = slug_title[: episode_match.start()].strip()
+
+    title = slug_title
     if not title:
-        title = slug.replace("-", " ").title()
-    episode = _first_text(
-        hv or data,
-        ("episode_number", "episode", "ep", "number"),
-    )
-    if episode and not re.search(r"(?i)\b(?:ep|episode)\s*0*" + re.escape(episode) + r"\b", title):
+        for key in ("name", "title", "display_name", "video_title", "slug"):
+            value = hv.get(key) if hv else None
+            if isinstance(value, str) and value.strip():
+                title = re.sub(r"[-_]+", " ", value.strip()).title()
+                break
+
+    episode = ""
+    for key in ("episode_number", "episode", "ep", "number"):
+        value = hv.get(key) if hv else None
+        if value not in (None, ""):
+            episode = str(value).strip()
+            break
+    episode = episode or slug_episode
+    if episode:
         episode = episode.zfill(2) if episode.isdigit() else episode
+        title = re.sub(rf"(?i)\s+(?:ep(?:isode)?\s*)?0*{re.escape(episode)}$", "", title).strip()
         title = f"{title} - Episode {episode}"
     return title
 
@@ -464,10 +479,12 @@ async def resolve_hanime(link, options=None):
         data = await _hanime_local_resolve(link)
 
     slug = data.get("slug") or _hanime_slug(link)
-    if not data.get("title") and slug:
-        video_data = await _hanime_video_data(slug)
+    if slug:
+        video_data = {}
+        if not data.get("title") or not data.get("thumbnail"):
+            video_data = await _hanime_video_data(slug)
+        data["title"] = _hanime_title_from_data(slug, video_data)
         if video_data:
-            data["title"] = _hanime_title_from_data(slug, video_data)
             data["thumbnail"] = data.get("thumbnail") or _first_image(video_data)
     title = data.get("title") or slug.replace("-", " ").title() or "Hanime Video"
     streams = []

@@ -500,6 +500,7 @@ class SiteSelection:
             "qual": ",".join(formats) if formats else "best",
             "name": self.site_data["title"],
             "thumb": self.site_data.get("thumbnail") or "",
+            "site": "mx",
             "options": {"allow_multiple_audio_streams": len(audio_ids) > 1},
         }
 
@@ -512,6 +513,7 @@ class SiteSelection:
             "qual": "best",
             "name": self.site_data["title"],
             "thumb": self.site_data.get("thumbnail") or "",
+            "site": "hanime",
             "options": {},
         }
 
@@ -801,10 +803,12 @@ class YtDlp(TaskListener):
                 return
             self.link = selected["link"]
             qual = selected["qual"]
+            if selected.get("site") == "hanime":
+                self.force_anime_thumbnail = True
             if selected.get("name") and not self.name:
                 self.name = selected["name"]
                 self.custom_name = selected["name"]
-            if selected.get("thumb") and not self.thumb:
+            if selected.get("thumb") and not self.thumb and selected.get("site") != "hanime":
                 thumb = selected["thumb"]
                 if isinstance(thumb, str) and thumb.startswith(("http://", "https://")):
                     thumb = await download_image_thumb(thumb, landscape=True)

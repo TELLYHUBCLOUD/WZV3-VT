@@ -30,6 +30,21 @@ HANIME_LETTER = ""  # Owner-only reserved bulk letter, example: A
 HANIME_DUMP_CHAT = ""  # Owner-only reserved dump channel/chat id
 HANIME_UPLOAD_BOT_TOKEN = ""  # Owner-only reserved upload bot token
 HANIME_DOWNLOAD = False  # Owner-only reserved switch for Hanime bulk automation
+HANIME_POST_TEMPLATE = """<b>{title} - {episode}</b>
+
+‣ Views : <code>{views}</code>
+‣ Downloads : <code>{downloads}</code>
+‣ Rank : <code>{rank}</code>
+‣ Uploaded: <code>{upload_date}</code>
+‣ Studio : <code>{studio}</code>
+
+~ Genres : <i>{genres}</i>
+
+<blockquote expandable>‣ Synopsis : {synopsis}</blockquote>"""
+HANIME_BRAND_TEXT = "Anime Starfall"
+HANIME_LETTER_MAX = 0  # 0 means no limit
+HANIME_LETTER_DELAY = 2
+HANIME_FORCE_INTRO_SUBTITLE = True
 USE_SERVICE_ACCOUNTS = False
 NAME_SWAP = ""
 FFMPEG_CMDS = {

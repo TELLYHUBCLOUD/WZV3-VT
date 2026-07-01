@@ -281,8 +281,18 @@ async def hanime_api(url: str):
         streams = data.get("streams") or []
         return JSONResponse(
             {
-                "slug": url.rstrip("/").split("/")[-1],
+                "slug": data.get("slug") or url.rstrip("/").split("/")[-1],
                 "title": data.get("title") or "Hanime Video",
+                "episode": data.get("episode") or "",
+                "views": data.get("views") or "",
+                "downloads": data.get("downloads") or "",
+                "rank": data.get("rank") or "",
+                "upload_date": data.get("upload_date") or "",
+                "studio": data.get("studio") or "",
+                "genres": data.get("genres") or "",
+                "synopsis": data.get("synopsis") or "",
+                "poster_url": data.get("poster_url") or "",
+                "cover_url": data.get("cover_url") or "",
                 "thumbnail": data.get("thumbnail") or "",
                 "best": streams[0]["url"] if streams else "",
                 "streams": streams,

@@ -514,6 +514,8 @@ class SiteSelection:
             "name": self.site_data["title"],
             "thumb": self.site_data.get("thumbnail") or "",
             "site": "hanime",
+            "streams": streams,
+            "metadata": self.site_data,
             "options": {},
         }
 
@@ -562,6 +564,11 @@ class YtDlp(TaskListener):
         self.options = options
         self.same_dir = same_dir
         self.bulk = bulk
+        self.hanime_letter_leech = bool(kwargs.get("hanime_letter_leech", False))
+        self.hanime_metadata = kwargs.get("hanime_metadata") or {}
+        self.hanime_quality = kwargs.get("hanime_quality") or ""
+        self.hanime_output_name = kwargs.get("hanime_output_name") or ""
+        self.force_intro_subtitle = bool(kwargs.get("force_intro_subtitle", False))
         super().__init__()
         self.is_ytdlp = True
         self.is_leech = is_leech
@@ -806,10 +813,15 @@ class YtDlp(TaskListener):
             if selected.get("site") == "hanime":
                 self.skip_auto_rename = True
                 self.skip_auto_thumbnail = True
+                if not self.hanime_metadata:
+                    self.hanime_metadata = selected.get("metadata") or {}
+                streams = selected.get("streams") or []
+                if streams and not self.hanime_quality:
+                    self.hanime_quality = streams[0].get("label") or f"{streams[0].get('height')}p"
             if selected.get("name") and not self.name:
                 self.name = selected["name"]
                 self.custom_name = selected["name"]
-            if selected.get("thumb") and not self.thumb:
+            if selected.get("thumb") and not self.thumb and not self.hanime_letter_leech:
                 thumb = selected["thumb"]
                 if isinstance(thumb, str) and thumb.startswith(("http://", "https://")):
                     thumb = await download_image_thumb(thumb, landscape=True)
@@ -817,6 +829,12 @@ class YtDlp(TaskListener):
                     self.thumb = thumb
             if selected.get("options"):
                 download_opt = {**download_opt, **selected["options"]}
+            if self.hanime_letter_leech:
+                download_opt = {
+                    **download_opt,
+                    "merge_output_format": "mkv",
+                    "writethumbnail": False,
+                }
             await self.run_multi(input_list, YtDlp)
         else:
             try:

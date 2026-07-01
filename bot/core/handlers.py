@@ -424,6 +424,13 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            hanime_letter_leech,
+            filters=command(BotCommands.HanimeLetterLeechCommand, case_sensitive=True)
+            & CustomFilters.owner,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             hydra_search,
             filters=command(BotCommands.NzbSearchCommand, case_sensitive=True)
             & CustomFilters.authorized,

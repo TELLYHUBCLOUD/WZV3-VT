@@ -35,6 +35,8 @@ def auto_enabled(listener):
 
 
 def bool_setting(listener, key):
+    if key == "AUTO_INTRO_SUBTITLE" and getattr(listener, "force_intro_subtitle", False):
+        return True
     return bool(_user_value(listener, key))
 
 
@@ -161,7 +163,7 @@ async def process_auto_pipeline(listener, up_path, gid):
 
 
 async def process_auto_finish_pipeline(listener, up_path, gid):
-    if not auto_enabled(listener):
+    if not auto_enabled(listener) and not getattr(listener, "force_intro_subtitle", False):
         return up_path
     listener._process_gid = gid
     listener._auto_process_step = 0

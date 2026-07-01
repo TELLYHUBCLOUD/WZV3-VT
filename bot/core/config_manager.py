@@ -58,6 +58,20 @@ class Config:
     HANIME_DUMP_CHAT = ""
     HANIME_UPLOAD_BOT_TOKEN = ""
     HANIME_DOWNLOAD = False
+    HANIME_POST_TEMPLATE = (
+        "<b>{title} - {episode}</b>\n\n"
+        "‣ Views : <code>{views}</code>\n"
+        "‣ Downloads : <code>{downloads}</code>\n"
+        "‣ Rank : <code>{rank}</code>\n"
+        "‣ Uploaded: <code>{upload_date}</code>\n"
+        "‣ Studio : <code>{studio}</code>\n\n"
+        "~ Genres : <i>{genres}</i>\n\n"
+        "<blockquote expandable>‣ Synopsis : {synopsis}</blockquote>"
+    )
+    HANIME_BRAND_TEXT = "Anime Starfall"
+    HANIME_LETTER_MAX = 0
+    HANIME_LETTER_DELAY = 2
+    HANIME_FORCE_INTRO_SUBTITLE = True
     EQUAL_SPLITS = False
     EXCLUDED_EXTENSIONS = ""
     FFMPEG_CMDS = {

@@ -274,6 +274,14 @@ class TaskListener(TaskConfig):
             self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
+        elif getattr(self, "force_intro_subtitle", False) and not self.video_tool and not self.is_cancelled:
+            up_path = await process_auto_finish_pipeline(self, up_path, gid)
+            if self.is_cancelled:
+                return
+            self.is_file = await aiopath.isfile(up_path)
+            self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
+            self.size = await get_path_size(up_dir)
+            self.clear()
 
         if self.ffmpeg_cmds:
             up_path = await self.proceed_ffmpeg(

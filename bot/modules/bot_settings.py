@@ -121,6 +121,20 @@ DEFAULT_VALUES = {
     "HANIME_DUMP_CHAT": "",
     "HANIME_UPLOAD_BOT_TOKEN": "",
     "HANIME_DOWNLOAD": False,
+    "HANIME_POST_TEMPLATE": (
+        "<b>{title} - {episode}</b>\n\n"
+        "‣ Views : <code>{views}</code>\n"
+        "‣ Downloads : <code>{downloads}</code>\n"
+        "‣ Rank : <code>{rank}</code>\n"
+        "‣ Uploaded: <code>{upload_date}</code>\n"
+        "‣ Studio : <code>{studio}</code>\n\n"
+        "~ Genres : <i>{genres}</i>\n\n"
+        "<blockquote expandable>‣ Synopsis : {synopsis}</blockquote>"
+    ),
+    "HANIME_BRAND_TEXT": "Anime Starfall",
+    "HANIME_LETTER_MAX": 0,
+    "HANIME_LETTER_DELAY": 2,
+    "HANIME_FORCE_INTRO_SUBTITLE": True,
     "CTORRENT_STORAGE_DIR": "/usr/src/app/torrents/seeding",
     "CTORRENT_OUTPUT_DIR": "/usr/src/app/torrents/output",
     "CTORRENT_TRACKERS": "udp://tracker.opentrackr.org:1337/announce\nudp://open.stealth.si:80/announce\nudp://tracker.torrent.eu.org:451/announce\nudp://open.demonii.com:1337/announce",

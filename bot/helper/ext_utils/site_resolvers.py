@@ -3,6 +3,8 @@ import os
 import re
 import tempfile
 from asyncio import create_subprocess_exec, sleep, to_thread, wait_for
+from datetime import datetime, timezone
+from html import unescape
 from logging import getLogger
 from time import time
 from urllib.parse import quote
@@ -18,6 +20,7 @@ HANIME_RE = re.compile(r"https?://(?:www\.)?hanime\.tv/videos/hentai/([^/?#\s]+)
 MX_RE = re.compile(r"https?://(?:www\.)?(?:mxplayer\.in|mxplay\.com)/\S+", re.I)
 
 HANIME_BASE = "https://cached.freeanimehentai.net/api/v8"
+HANIME_SEARCH_URL = "https://guest.freeanimehentai.net/api/v11/search_hvs"
 HANIME_UA = (
     "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36"
@@ -36,6 +39,7 @@ HANIME_HEADERS = {
 
 _hanime_vendor_cache = None
 _hanime_video_cache = {}
+_hanime_search_cache = {}
 
 
 def is_mx_link(link):
@@ -215,6 +219,10 @@ def _hanime_slug(link):
     return match.group(1) if match else ""
 
 
+def hanime_url_from_slug(slug):
+    return f"https://hanime.tv/videos/hentai/{slug}"
+
+
 async def _hanime_api_resolve(link, api_base):
     async with AsyncClient(timeout=45) as client:
         resp = await client.get(api_base, params={"url": link})
@@ -286,7 +294,30 @@ def _first_image(data):
     return ""
 
 
-def _hanime_title_from_data(slug, data):
+def _clean_text(value):
+    value = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.I)
+    value = re.sub(r"</p\s*>", "\n", value, flags=re.I)
+    value = re.sub(r"<[^>]+>", "", value)
+    value = unescape(value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _format_hanime_date(value):
+    if not value:
+        return ""
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            return str(value)
+    value = str(value)
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+    except Exception:
+        return value.split("T", 1)[0]
+
+
+def _hanime_title_episode(slug, data):
     hv = data.get("hentai_video") if isinstance(data, dict) else {}
     hv = hv if isinstance(hv, dict) else {}
     title = ""
@@ -306,7 +337,7 @@ def _hanime_title_from_data(slug, data):
             slug_title = slug_title[: episode_match.start()].strip()
 
     if not title:
-        title = slug_title
+        title = slug_title or "Hanime Video"
 
     episode = ""
     for key in ("episode_number", "episode", "ep", "number"):
@@ -318,8 +349,49 @@ def _hanime_title_from_data(slug, data):
     if episode:
         episode = episode.zfill(2) if episode.isdigit() else episode
         title = re.sub(rf"(?i)\s+(?:ep(?:isode)?\s*)?0*{re.escape(episode)}$", "", title).strip()
+    return title, episode
+
+
+def _hanime_title_from_data(slug, data):
+    title, episode = _hanime_title_episode(slug, data)
+    if episode:
         title = f"{title} - Episode {episode}"
     return title
+
+
+def _hanime_metadata(slug, data):
+    hv = data.get("hentai_video") if isinstance(data, dict) else data
+    hv = hv if isinstance(hv, dict) else {}
+    title, episode = _hanime_title_episode(slug, data)
+    tags = hv.get("tags") or hv.get("hentai_tags") or hv.get("genres") or []
+    genres = []
+    for tag in tags:
+        if isinstance(tag, str):
+            genres.append(tag)
+        elif isinstance(tag, dict):
+            name = tag.get("name") or tag.get("text")
+            if name:
+                genres.append(str(name))
+    released = (
+        hv.get("released_at")
+        or hv.get("released_at_unix")
+        or hv.get("created_at")
+        or hv.get("created_at_unix")
+    )
+    return {
+        "slug": slug,
+        "title": title,
+        "episode": episode,
+        "views": hv.get("views") or "",
+        "downloads": hv.get("downloads") or hv.get("download_count") or "",
+        "rank": hv.get("rank") or hv.get("monthly_rank") or "",
+        "upload_date": _format_hanime_date(released),
+        "studio": hv.get("brand") or _first_text(hv, ("brand", "studio", "name")),
+        "genres": ", ".join(genres),
+        "synopsis": _clean_text(hv.get("description") or hv.get("synopsis") or ""),
+        "poster_url": hv.get("poster_url") or "",
+        "cover_url": hv.get("cover_url") or "",
+    }
 
 
 async def _hanime_video_data(slug):
@@ -336,6 +408,51 @@ async def _hanime_video_data(slug):
     data = resp.json()
     _hanime_video_cache[slug] = data
     return data
+
+
+async def discover_hanime_letter(letter, limit=0):
+    letter = str(letter or "").strip()[:1].upper()
+    if not letter:
+        return []
+    cache_key = (letter, int(limit or 0))
+    if cache_key in _hanime_search_cache:
+        return _hanime_search_cache[cache_key]
+
+    candidates = {}
+    async with AsyncClient(timeout=45) as client:
+        resp = await client.get(
+            HANIME_SEARCH_URL,
+            params={"search_text": letter.lower()},
+            headers={
+                "User-Agent": HANIME_UA,
+                "Accept": "application/json",
+                "Referer": "https://hanime.tv/browse",
+            },
+        )
+    if resp.status_code != 200:
+        raise ValueError(f"Hanime catalog returned HTTP {resp.status_code}.")
+    try:
+        rows = resp.json()
+    except Exception as e:
+        raise ValueError(f"Hanime catalog JSON parse failed: {e}") from e
+
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        slug = row.get("slug")
+        title = _clean_text(row.get("name") or row.get("title") or "")
+        normalized = re.sub(r"^[^A-Za-z0-9]+", "", title).upper()
+        if not slug or not normalized.startswith(letter):
+            continue
+        meta = _hanime_metadata(slug, {"hentai_video": row})
+        meta["source_url"] = hanime_url_from_slug(slug)
+        candidates[slug] = meta
+
+    result = sorted(candidates.values(), key=lambda item: item.get("title", "").casefold())
+    if limit and int(limit) > 0:
+        result = result[: int(limit)]
+    _hanime_search_cache[cache_key] = result
+    return result
 
 
 async def _hanime_get_hv_id(slug):
@@ -459,11 +576,13 @@ async def _hanime_local_resolve(link):
     if not streams:
         raise ValueError("No Hanime streams found.")
     video_data = await _hanime_video_data(slug)
+    metadata = _hanime_metadata(slug, video_data)
     return {
         "slug": slug,
         "hv_id": hv_id,
         "title": _hanime_title_from_data(slug, video_data),
         "thumbnail": _first_image(video_data),
+        **metadata,
         "streams": streams,
     }
 
@@ -481,14 +600,13 @@ async def resolve_hanime(link, options=None):
         data = await _hanime_local_resolve(link)
 
     slug = data.get("slug") or _hanime_slug(link)
-    if slug and (not data.get("title") or not data.get("thumbnail")):
-        video_data = {}
-        if not data.get("title") or not data.get("thumbnail"):
-            video_data = await _hanime_video_data(slug)
+    metadata = {}
+    if slug:
+        video_data = await _hanime_video_data(slug)
+        metadata = _hanime_metadata(slug, video_data)
         data["title"] = data.get("title") or _hanime_title_from_data(slug, video_data)
-        if video_data:
-            data["thumbnail"] = data.get("thumbnail") or _first_image(video_data)
-    title = data.get("title") or slug.replace("-", " ").title() or "Hanime Video"
+        data["thumbnail"] = data.get("thumbnail") or _first_image(video_data)
+    title = data.get("title") or metadata.get("title") or slug.replace("-", " ").title() or "Hanime Video"
     streams = []
     for stream in data.get("streams") or []:
         url = stream.get("url") or ""
@@ -512,7 +630,9 @@ async def resolve_hanime(link, options=None):
     return {
         "type": "hanime",
         "source_url": link,
+        "slug": slug,
         "title": title,
         "thumbnail": data.get("thumbnail") or "",
+        **metadata,
         "streams": streams,
     }

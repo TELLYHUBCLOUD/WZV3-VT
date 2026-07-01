@@ -315,8 +315,8 @@ class TaskListener(TaskConfig):
             self.size = await get_path_size(up_dir)
             self.clear()
 
-        metadata_allowed = True
-        if auto_enabled(self):
+        metadata_allowed = not getattr(self, "hanime_letter_leech", False)
+        if metadata_allowed and auto_enabled(self):
             metadata_allowed = bool_setting(self, "AUTO_METADATA")
         if metadata_allowed and not getattr(self, "_vt_extract_only", False) and (
             (hasattr(self, "metadata_dict") and self.metadata_dict)

@@ -18,6 +18,7 @@ from ..helper.ext_utils.bot_utils import (
     sync_to_async,
 )
 from ..helper.ext_utils.links_utils import is_url
+from ..helper.ext_utils.media_utils import download_image_thumb
 from ..helper.ext_utils.site_resolvers import resolve_external_site
 from ..helper.ext_utils.task_manager import pre_task_check
 from ..helper.ext_utils.status_utils import get_readable_file_size, get_readable_time
@@ -311,12 +312,15 @@ class SiteSelection:
         desired = self._default_list("mx_quality")
         if not desired:
             return None
-        videos = [
-            item
-            for item in self.site_data.get("videos", [])
-            if str(item.get("height") or "").lower() in desired
-            or str(item.get("label") or "").split("p", 1)[0].lower() in desired
-        ]
+        if any(item in {"all", "*"} for item in desired):
+            videos = self.site_data.get("videos", [])
+        else:
+            videos = [
+                item
+                for item in self.site_data.get("videos", [])
+                if str(item.get("height") or "").lower() in desired
+                or str(item.get("label") or "").split("p", 1)[0].lower() in desired
+            ]
         if not videos:
             return None
         audio_pref = str(
@@ -344,12 +348,15 @@ class SiteSelection:
         desired = self._default_list("hanime_quality")
         if not desired:
             return None
-        streams = [
-            item
-            for item in self.site_data.get("streams", [])
-            if str(item.get("height") or "").lower() in desired
-            or str(item.get("label") or "").split("p", 1)[0].lower() in desired
-        ]
+        if any(item in {"all", "*"} for item in desired):
+            streams = self.site_data.get("streams", [])
+        else:
+            streams = [
+                item
+                for item in self.site_data.get("streams", [])
+                if str(item.get("height") or "").lower() in desired
+                or str(item.get("label") or "").split("p", 1)[0].lower() in desired
+            ]
         if not streams:
             return None
         return self._build_hanime_result(streams)
@@ -798,7 +805,11 @@ class YtDlp(TaskListener):
                 self.name = selected["name"]
                 self.custom_name = selected["name"]
             if selected.get("thumb") and not self.thumb:
-                self.thumb = selected["thumb"]
+                thumb = selected["thumb"]
+                if isinstance(thumb, str) and thumb.startswith(("http://", "https://")):
+                    thumb = await download_image_thumb(thumb, landscape=True)
+                if thumb:
+                    self.thumb = thumb
             if selected.get("options"):
                 download_opt = {**download_opt, **selected["options"]}
             await self.run_multi(input_list, YtDlp)

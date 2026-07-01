@@ -35,6 +35,7 @@ HANIME_HEADERS = {
 }
 
 _hanime_vendor_cache = None
+_hanime_video_cache = {}
 
 
 def is_mx_link(link):
@@ -237,7 +238,76 @@ def _hanime_headers(path):
     }
 
 
-async def _hanime_get_hv_id(slug):
+def _first_text(data, keys):
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, (int, float)) and value:
+                return str(value)
+        for value in data.values():
+            found = _first_text(value, keys)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _first_text(item, keys)
+            if found:
+                return found
+    return ""
+
+
+def _first_image(data):
+    image_keys = (
+        "cover_url",
+        "poster_url",
+        "thumbnail_url",
+        "poster",
+        "cover",
+        "thumbnail",
+        "image",
+        "url",
+    )
+    if isinstance(data, dict):
+        for key in image_keys:
+            value = data.get(key)
+            if isinstance(value, str) and value.startswith(("http://", "https://")):
+                return value
+        for value in data.values():
+            found = _first_image(value)
+            if found:
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _first_image(item)
+            if found:
+                return found
+    return ""
+
+
+def _hanime_title_from_data(slug, data):
+    hv = data.get("hentai_video") if isinstance(data, dict) else {}
+    hv = hv if isinstance(hv, dict) else {}
+    title = _first_text(
+        hv or data,
+        ("name", "title", "display_name", "video_title", "slug"),
+    )
+    if not title:
+        title = slug.replace("-", " ").title()
+    episode = _first_text(
+        hv or data,
+        ("episode_number", "episode", "ep", "number"),
+    )
+    if episode and not re.search(r"(?i)\b(?:ep|episode)\s*0*" + re.escape(episode) + r"\b", title):
+        episode = episode.zfill(2) if episode.isdigit() else episode
+        title = f"{title} - Episode {episode}"
+    return title
+
+
+async def _hanime_video_data(slug):
+    if slug in _hanime_video_cache:
+        return _hanime_video_cache[slug]
     async with AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{HANIME_BASE}/video",
@@ -245,8 +315,14 @@ async def _hanime_get_hv_id(slug):
             headers=_hanime_headers("/api/v8/video"),
         )
     if resp.status_code != 200:
-        return None
+        return {}
     data = resp.json()
+    _hanime_video_cache[slug] = data
+    return data
+
+
+async def _hanime_get_hv_id(slug):
+    data = await _hanime_video_data(slug)
     hv = data.get("hentai_video") or data
     vid = hv.get("id") or hv.get("hv_id")
     return str(vid) if vid else None
@@ -365,7 +441,14 @@ async def _hanime_local_resolve(link):
         pass
     if not streams:
         raise ValueError("No Hanime streams found.")
-    return {"slug": slug, "hv_id": hv_id, "streams": streams}
+    video_data = await _hanime_video_data(slug)
+    return {
+        "slug": slug,
+        "hv_id": hv_id,
+        "title": _hanime_title_from_data(slug, video_data),
+        "thumbnail": _first_image(video_data),
+        "streams": streams,
+    }
 
 
 async def resolve_hanime(link, options=None):
@@ -381,6 +464,11 @@ async def resolve_hanime(link, options=None):
         data = await _hanime_local_resolve(link)
 
     slug = data.get("slug") or _hanime_slug(link)
+    if not data.get("title") and slug:
+        video_data = await _hanime_video_data(slug)
+        if video_data:
+            data["title"] = _hanime_title_from_data(slug, video_data)
+            data["thumbnail"] = data.get("thumbnail") or _first_image(video_data)
     title = data.get("title") or slug.replace("-", " ").title() or "Hanime Video"
     streams = []
     for stream in data.get("streams") or []:

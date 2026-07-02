@@ -44,6 +44,7 @@ HANIME_POST_TEMPLATE = """<b>{title}</b>
 HANIME_BRAND_TEXT = "Anime Starfall"
 HANIME_LETTER_MAX = 0  # 0 means no limit
 HANIME_LETTER_DELAY = 2
+HANIME_QUALITY_TIMEOUT = 1800  # Per quality max seconds before cancelling a dead CDN stream
 HANIME_FORCE_INTRO_SUBTITLE = True
 USE_SERVICE_ACCOUNTS = False
 NAME_SWAP = ""

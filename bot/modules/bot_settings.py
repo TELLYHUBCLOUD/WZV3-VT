@@ -134,6 +134,7 @@ DEFAULT_VALUES = {
     "HANIME_BRAND_TEXT": "Anime Starfall",
     "HANIME_LETTER_MAX": 0,
     "HANIME_LETTER_DELAY": 2,
+    "HANIME_QUALITY_TIMEOUT": 1800,
     "HANIME_FORCE_INTRO_SUBTITLE": True,
     "CTORRENT_STORAGE_DIR": "/usr/src/app/torrents/seeding",
     "CTORRENT_OUTPUT_DIR": "/usr/src/app/torrents/output",

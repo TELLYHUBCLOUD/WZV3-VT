@@ -1,4 +1,4 @@
-from asyncio import Event, sleep
+from asyncio import FIRST_COMPLETED, Event, create_task, sleep, wait, wait_for
 from html import escape
 from re import sub
 
@@ -56,10 +56,6 @@ def _hanime_base_name(metadata, quality):
     return f"🄰🅂- {title} [{quality}] ~ [@Anime_Starfall🥰]"
 
 
-def _hanime_filename(metadata, quality):
-    return f"{_hanime_base_name(metadata, quality)}.mkv"
-
-
 async def _send_hanime_poster(message, metadata):
     caption = build_hanime_caption(metadata)
     if len(caption) > 1000:
@@ -91,11 +87,15 @@ async def _send_hanime_poster(message, metadata):
 async def _run_hanime_quality(client, message, controller, source_url, metadata, stream):
     quality = stream.get("label") or f"{stream.get('height')}p"
     base_name = _hanime_base_name(metadata, quality)
-    filename = _hanime_filename(metadata, quality)
     opt = {
         "hanime_quality": str(stream.get("height") or quality).replace("p", ""),
         "merge_output_format": "mkv",
         "writethumbnail": False,
+        "socket_timeout": 20,
+        "fragment_retries": 5,
+        "retries": 5,
+        "skip_unavailable_fragments": True,
+        "abort_on_unavailable_fragment": False,
     }
     up_arg = ""
     if getattr(Config, "HANIME_DUMP_CHAT", ""):
@@ -111,7 +111,7 @@ async def _run_hanime_quality(client, message, controller, source_url, metadata,
     task_msg = await client.get_messages(chat_id=task_msg.chat.id, message_ids=task_msg.id)
     task_msg.text = (
         f"/{BotCommands.YtdlLeechCommand[0]} {source_url}{up_arg} "
-        f"-opt {opt!r} -n {base_name}"
+        f"-fd -opt {opt!r} -n {base_name}"
     )
     if message.from_user:
         task_msg.from_user = message.from_user
@@ -127,7 +127,7 @@ async def _run_hanime_quality(client, message, controller, source_url, metadata,
         hanime_letter_leech=True,
         hanime_metadata=metadata,
         hanime_quality=quality,
-        hanime_output_name=filename,
+        hanime_output_name=base_name,
         force_intro_subtitle=bool(getattr(Config, "HANIME_FORCE_INTRO_SUBTITLE", True)),
     )
     controller.register(worker)
@@ -138,20 +138,51 @@ async def _run_hanime_quality(client, message, controller, source_url, metadata,
         task_started = worker.mid in task_dict
     if not task_started and not done_event.is_set():
         done_event.set()
-    await done_event.wait()
+    timeout = max(600, int(getattr(Config, "HANIME_QUALITY_TIMEOUT", 1800) or 1800))
+    try:
+        await wait_for(done_event.wait(), timeout=timeout)
+    except TimeoutError:
+        worker.is_cancelled = True
+        async with task_dict_lock:
+            task = task_dict.get(worker.mid)
+        if task:
+            try:
+                await task.task().cancel_task()
+            except Exception:
+                pass
+        return f"download_timeout: {quality}"
     return getattr(worker, "bq_result", "")
 
 
 async def _run_hanime_streams(client, message, controller, source_url, metadata):
-    for stream in metadata.get("streams") or []:
-        if controller.cancelled:
+    streams = list(metadata.get("streams") or [])
+    active = set()
+    index = 0
+    max_parallel = 3
+    while (index < len(streams) or active) and not controller.cancelled:
+        while index < len(streams) and len(active) < max_parallel and not controller.cancelled:
+            active.add(
+                create_task(
+                    _run_hanime_quality(
+                        client, message, controller, source_url, metadata, streams[index]
+                    )
+                )
+            )
+            index += 1
+            await sleep(0.5)
+        if not active:
             break
-        result = await _run_hanime_quality(
-            client, message, controller, source_url, metadata, stream
-        )
-        if result and result != "complete":
-            LOGGER.warning(f"Hanime quality task ended with: {result}")
-        await sleep(1)
+        done, active = await wait(active, return_when=FIRST_COMPLETED)
+        for task in done:
+            try:
+                result = task.result()
+                if result and result != "complete":
+                    LOGGER.warning(f"Hanime quality task ended with: {result}")
+            except Exception as e:
+                LOGGER.error(f"Hanime quality task failed: {e}", exc_info=True)
+
+    for task in active:
+        task.cancel()
 
 
 @new_task

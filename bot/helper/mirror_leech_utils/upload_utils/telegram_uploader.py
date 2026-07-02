@@ -199,6 +199,9 @@ class TelegramUploader:
         cap_file_ = file_ = pre_file_
         hanime_name = getattr(self._listener, "hanime_output_name", "")
         if getattr(self._listener, "hanime_letter_leech", False) and hanime_name:
+            if not ospath.splitext(hanime_name)[1]:
+                ext = ospath.splitext(pre_file_)[1] or ".mp4"
+                hanime_name = f"{hanime_name}{ext}"
             file_ = cap_file_ = hanime_name
 
         # AutoRename logic: apply before prefix/suffix

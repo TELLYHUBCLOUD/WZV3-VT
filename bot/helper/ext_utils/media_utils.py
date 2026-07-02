@@ -48,7 +48,7 @@ TITLE_NOISE_PATTERN = (
     r"WEB\s?DL|WEB\s?Rip|WEBRIP|Blu\s?Ray|BRRip|BDRip|HDRip|HDTV|DVDRip|REMUX|"
     r"DSNP|AMZN|NF|JHS|Hotstar|HBO|IMAX|CR|MULTI\d*|MULTi\d*|Dual|"
     r"EAC3|E\s?AC3|DDP|AC3|AAC|DTS|TrueHD|Atmos|Opus|FLAC|MP3|"
-    r"HEVC|H265|H264|x265|x264|AV1|10bit|8bit|12bit|"
+    r"HEVC|H265|H264|x265|x264|×265|×264|AV1|10bit|8bit|12bit|"
     r"Tamil|Telugu|Hindi|English|Malayalam|Kannada|ESub|MSub|Sub"
     r")\b"
 )
@@ -133,8 +133,12 @@ async def download_image_thumb(url, landscape=False):
                 with Image.open(src) as im:
                     im = ImageOps.exif_transpose(im).convert("RGB")
                     if landscape:
-                        # Preserve provider composition. Telegram can use non-16:9
-                        # thumbnails, so only scale down oversized images.
+                        aspect = im.width / max(im.height, 1)
+                        if im.width <= im.height or aspect < 1.45 or aspect > 2.35 or im.height < 360:
+                            raise ValueError(
+                                f"provider image is not a usable landscape thumbnail: {im.width}x{im.height}"
+                            )
+                        # Preserve provider composition; only scale down oversized images.
                         im.thumbnail((1280, 1280), Image.Resampling.LANCZOS)
                     im.save(
                         dst, "JPEG", quality=_thumb_quality(), optimize=True
@@ -1553,7 +1557,8 @@ async def _extract_stream_rename_info(filepath):
 
 
 async def build_caption_metadata(filename, filepath=None, **extra):
-    metadata = await extract_metadata_from_filename(filename, filepath)
+    metadata_seed = choose_media_title_seed(filename, **extra)
+    metadata = await extract_metadata_from_filename(metadata_seed, filepath)
     metadata = {key: str(value or "") for key, value in metadata.items()}
     metadata.setdefault("filename", filename)
     metadata["filename"] = filename
@@ -2009,12 +2014,27 @@ async def extract_metadata_from_filename(filename, filepath=None):
         "release_group": "",
         "group": "",
         "DS4K": "",
+        "start": "",
+        "end": "",
+        "range": "",
     }
 
     pattern = (
         r"^\[(?:" + "|".join(re.escape(tag) for tag in UPLOADER_TAGS) + r")\]\s*"
     )
     clean_filename = re.sub(pattern, "", filename, flags=re.IGNORECASE).strip()
+
+    merge_range = re.search(
+        r"^\[S0*(\d{1,2})-EP\((\d{1,4})-(\d{1,4})\)\]",
+        clean_filename,
+        re.IGNORECASE,
+    )
+    if merge_range:
+        metadata["season"] = merge_range.group(1)
+        metadata["start"] = merge_range.group(2).zfill(2)
+        metadata["end"] = merge_range.group(3).zfill(2)
+        metadata["range"] = f"EP({metadata['start']} - {metadata['end']})"
+        metadata["episode"] = metadata["range"]
 
     title_patterns = [
         r"^(.+?)[\s\.\-]*(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s\.\-]*[Ee]0*(\d{1,4})(?![A-Za-z0-9])",
@@ -2027,7 +2047,7 @@ async def extract_metadata_from_filename(filename, filepath=None):
     ]
 
     title_found = False
-    episode_found = False
+    episode_found = bool(merge_range)
 
     for pat in title_patterns:
         title_match = re.search(pat, clean_filename, re.IGNORECASE)
@@ -2243,7 +2263,8 @@ async def apply_template_rename(filename, template, filepath=None, **extra):
     """
     if not template or "{" not in template:
         return filename
-    metadata = await extract_metadata_from_filename(filename, filepath)
+    metadata_seed = choose_media_title_seed(filename, **extra)
+    metadata = await extract_metadata_from_filename(metadata_seed, filepath)
     metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
 
     def _apply_math_offset(tmpl, meta):
@@ -2331,6 +2352,12 @@ def _strip_poster_search_prefix(title):
         title,
         flags=re.IGNORECASE,
     )
+    title = re.sub(
+        r"^\s*\[(?!S\d{1,2}\s*E\d{1,4}\])[^]]{1,40}\]\s*[-_. ]*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
     title = re.sub(r"^\s*[^\w\[\(]{1,12}\s*[-_. ]+", "", title, flags=re.UNICODE)
     title = re.sub(
         r"^\s*[A-Z0-9]{1,8}\s*[-_. ]+(?=\[?[Ss]\d{1,2}[\s._-]*[Ee]\d{1,4}\]?)",
@@ -2338,6 +2365,52 @@ def _strip_poster_search_prefix(title):
         title,
     )
     return title.strip(" -._")
+
+
+def is_hash_like_title(value):
+    text = re.sub(r"[^A-Za-z0-9]", "", str(value or ""))
+    if len(text) < 12:
+        return False
+    return bool(re.fullmatch(r"[a-fA-F0-9]{12,}", text))
+
+
+def _first_caption_line(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("/"):
+            return line
+    return ""
+
+
+def _usable_media_seed(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = _strip_poster_search_prefix(text)
+    title, _, _ = format_clean_poster_title(text)
+    if not title or is_hash_like_title(title):
+        return ""
+    if len(re.findall(r"[A-Za-z0-9]", title)) < 2:
+        return ""
+    return text
+
+
+def choose_media_title_seed(filename, **extra):
+    candidates = [
+        extra.get("first_file") or extra.get("extracted_name"),
+        _first_caption_line(extra.get("file_caption") or extra.get("precaption")),
+        extra.get("custom_name"),
+        filename,
+        extra.get("link"),
+    ]
+    for candidate in candidates:
+        seed = _usable_media_seed(candidate)
+        if seed:
+            return seed
+    return filename
 
 
 def format_clean_poster_title(raw_title, rename_regex=None):
@@ -2689,6 +2762,16 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
     return None
 
 
+async def get_landscape_provider_thumbnail_url(raw_filename, rename_regex=None):
+    title, _, year = format_clean_poster_title(raw_filename, rename_regex)
+    if not title or len(title.strip()) < 2 or is_hash_like_title(title):
+        return None
+    tmdb_url = await get_tmdb_poster_link(title, year, as_doc=False)
+    if tmdb_url:
+        return tmdb_url
+    return await get_anilist_poster_link(title, as_doc=False)
+
+
 async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None, rename_regex=None, force=False):
     title, _, _ = format_clean_poster_title(raw_filename, rename_regex)
     if not force and not _looks_like_anime_name(raw_filename, title):
@@ -2696,9 +2779,7 @@ async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None,
 
     poster_url = (
         await get_anilist_poster_link(title, as_doc=False)
-        or await get_mal_poster_link(title, as_doc=False)
-        or await get_kitsu_poster_link(title, as_doc=False)
-        or await get_final_poster_url(raw_filename, as_doc=False, rename_regex=rename_regex)
+        or await get_tmdb_poster_link(title, as_doc=False)
     )
     if poster_url:
         thumb = await download_image_thumb(poster_url, landscape=True)

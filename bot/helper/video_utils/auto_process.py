@@ -12,7 +12,7 @@ from ...core.config_manager import BinConfig, Config
 from ...core.tg_client import TgClient
 from ..ext_utils.bot_utils import cmd_exec, sync_to_async
 from ..ext_utils.ffmpeg_queue import ffmpeg_task
-from ..ext_utils.files_utils import get_path_size, is_archive
+from ..ext_utils.files_utils import get_path_size, is_archive, is_supported_archive
 from ..ext_utils.media_utils import extract_metadata_from_filename
 from ..telegram_helper.message_utils import edit_message, send_file, send_message
 from .video_tools import (
@@ -103,13 +103,13 @@ async def maybe_enable_auto_unzip(listener, up_path):
         return
     if listener.extract:
         return
-    if await aiopath.isfile(up_path) and is_archive(up_path):
+    if await aiopath.isfile(up_path) and await is_supported_archive(up_path):
         listener.extract = True
         return
     if await aiopath.isdir(up_path):
         for name in await listdir(up_path):
             path = ospath.join(up_path, name)
-            if await aiopath.isfile(path) and is_archive(path):
+            if await aiopath.isfile(path) and await is_supported_archive(path):
                 listener.extract = True
                 return
 
@@ -416,17 +416,18 @@ async def _smart_merge_directory(listener, root):
 
     output_paths = []
     await makedirs(root, exist_ok=True)
+    keep_sources = _has_keep_filters(listener)
     for batch in batches:
-        output_paths.extend(await _merge_batch_checked(listener, root, batch, limit))
+        output_paths.extend(await _merge_batch_checked(listener, root, batch, limit, keep_sources))
 
-    if output_paths:
+    if output_paths and not keep_sources:
         await _remove_non_outputs(root, set(output_paths), planner_path)
     if await aiopath.exists(planner_path):
         await remove(planner_path)
     return root
 
 
-async def _merge_batch_checked(listener, root, batch, limit):
+async def _merge_batch_checked(listener, root, batch, limit, keep_sources=False):
     out_path = await _merge_batch(listener, root, batch)
     if not out_path:
         return []
@@ -435,7 +436,8 @@ async def _merge_batch_checked(listener, root, batch, limit):
     except Exception:
         out_size = 0
     if out_size <= limit or len(batch) == 1:
-        await _delete_batch_sources(batch, out_path)
+        if not keep_sources:
+            await _delete_batch_sources(batch, out_path)
         return [out_path]
 
     await send_message(
@@ -443,8 +445,8 @@ async def _merge_batch_checked(listener, root, batch, limit):
         f"Auto Merge: output exceeded limit, moving last episode to next batch: <code>{ospath.basename(out_path)}</code>",
     )
     await remove(out_path)
-    first = await _merge_batch_checked(listener, root, batch[:-1], limit)
-    second = await _merge_batch_checked(listener, root, batch[-1:], limit)
+    first = await _merge_batch_checked(listener, root, batch[:-1], limit, keep_sources)
+    second = await _merge_batch_checked(listener, root, batch[-1:], limit, keep_sources)
     return first + second
 
 
@@ -492,11 +494,7 @@ def _batch_name(listener, batch):
     start = _episode_text(first["meta"].get("episode"))
     end = _episode_text(last["meta"].get("episode"))
     range_tag = f"[S{season}-EP({start}-{end})]"
-    template = (
-        listener.user_dict.get("AUTO_MERGE_FILENAME")
-        or Config.AUTO_MERGE_FILENAME
-        or "{title} {resolution} {bit} {quality} {lib}"
-    )
+    template = "{title} {resolution} {bit} {quality} {lib}"
     meta.update({"start": start, "end": end, "range": range_tag})
     try:
         base = template.format_map({k: str(v or "") for k, v in meta.items()})

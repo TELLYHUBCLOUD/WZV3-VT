@@ -46,11 +46,13 @@ from ...ext_utils.media_utils import (
     apply_regex_rename,
     apply_template_rename,
     build_caption_metadata,
+    choose_media_title_seed,
     download_image_thumb,
     get_anime_landscape_thumbnail,
     get_audio_thumbnail,
     get_document_type,
     get_final_poster_url,
+    get_landscape_provider_thumbnail_url,
     get_telegram_document_thumb,
     get_media_info,
     get_multiple_frames_thumbnail,
@@ -215,9 +217,7 @@ class TelegramUploader:
         if getattr(self._listener, "skip_auto_rename", False):
             autorename_enabled = False
 
-        merge_range_name = re_match(r"^\[S\d+-EP\(\d+-\d+\)\]", file_, IGNORECASE)
-
-        if autorename_enabled and not merge_range_name:
+        if autorename_enabled:
             try:
                 if rename_method == "auto":
                     template = (
@@ -230,6 +230,8 @@ class TelegramUploader:
                             template,
                             self._up_path,
                             file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
+                            first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
+                            custom_name=getattr(self._listener, "custom_name", ""),
                             link=getattr(self._listener, "source_url", ""),
                         )
                         cap_file_ = file_
@@ -282,6 +284,8 @@ class TelegramUploader:
                 prefilename=self._listener.file_details.get("filename", ""),
                 precaption=self._listener.file_details.get("caption", ""),
                 file_caption=self._listener.file_details.get("caption", ""),
+                first_file=self._listener.file_details.get("first_file", ""),
+                custom_name=getattr(self._listener, "custom_name", ""),
                 link=getattr(self._listener, "source_url", ""),
             )
             try:
@@ -716,7 +720,13 @@ class TelegramUploader:
                     try:
                         as_doc = self._listener.as_doc
                         custom_name = getattr(self._listener, "custom_name", "")
-                        thumb_lookup_name = custom_name or file
+                        thumb_lookup_name = choose_media_title_seed(
+                            file,
+                            first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
+                            file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
+                            custom_name=custom_name,
+                            link=getattr(self._listener, "source_url", ""),
+                        )
                         force_anime_thumb = getattr(self._listener, "force_anime_thumbnail", False)
                         rename_regex = (
                             self._listener.user_dict.get("lremname_regex")
@@ -730,9 +740,19 @@ class TelegramUploader:
                                 rename_regex,
                                 force_anime_thumb,
                             )
-                        if thumb is None:
+                        if thumb is None and is_video:
+                            poster_url = await get_landscape_provider_thumbnail_url(
+                                thumb_lookup_name, rename_regex
+                            )
+                            if poster_url:
+                                tmdb_thumb = await download_image_thumb(
+                                    poster_url, landscape=True
+                                )
+                                if tmdb_thumb:
+                                    thumb = tmdb_thumb
+                        elif thumb is None:
                             poster_url = await get_final_poster_url(
-                                custom_name or file, as_doc, rename_regex
+                                thumb_lookup_name, as_doc, rename_regex
                             )
                             if poster_url:
                                 tmdb_thumb = await download_image_thumb(

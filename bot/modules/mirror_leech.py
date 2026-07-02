@@ -116,6 +116,7 @@ class Mirror(TaskListener):
             "-ut": False,
             "-yt": False,
             "-i": 0,
+            "-zm": 0,
             "-sp": 0,
             "link": "",
             "-n": "",
@@ -183,11 +184,14 @@ class Mirror(TaskListener):
         self.thumbnail_layout = args["-tl"]
         self.as_doc = args["-doc"]
         self.as_med = args["-med"]
+        bare_video_merge = "-m" in input_list and not args["-m"]
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]
         self.user_trans = args["-ut"]
         self.is_yt = args["-yt"]
         self.video_tool = args["-vt"]
+        self.manual_video_merge = bool(bare_video_merge)
+        self.zip_merge = False
         self.metadata_dict = self.default_metadata_dict.copy()
         self.audio_metadata_dict = self.audio_metadata_dict.copy()
         self.video_metadata_dict = self.video_metadata_dict.copy()
@@ -213,9 +217,24 @@ class Mirror(TaskListener):
             self.multi = int(args["-i"])
         except Exception:
             self.multi = 0
+        try:
+            self.zip_merge = int(args["-zm"]) > 0
+            if self.zip_merge and self.multi <= 0:
+                self.multi = int(args["-zm"])
+        except Exception:
+            self.zip_merge = False
 
         if self.video_tool and self.multi > 1 and not self.folder_name:
             self.folder_name = f"/vt_video_merge_{self.message.id}"
+        if self.manual_video_merge:
+            self.video_tool = True
+            self.skip_video_tool_ui = True
+            self._vt_processed = True
+            self._vt_state = {"video_merge": True}
+            if self.multi > 1 and not self.folder_name:
+                self.folder_name = f"/vt_video_merge_{self.message.id}"
+        if self.zip_merge and self.multi > 1 and not self.folder_name:
+            self.folder_name = f"/zip_merge_{self.message.id}"
 
         try:
             if args["-ff"]:
@@ -440,7 +459,7 @@ class Mirror(TaskListener):
                     await delete_links(self.message)
                     return
 
-        if self.video_tool:
+        if self.video_tool and not getattr(self, "skip_video_tool_ui", False):
             from ..helper.video_utils.video_tools import pre_probe_and_show_ui
             await pre_probe_and_show_ui(self, file_, reply_to)
 

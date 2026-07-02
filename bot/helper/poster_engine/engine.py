@@ -16,6 +16,7 @@ from ..ext_utils.media_utils import (
     _clean_title_from_filename,
     _looks_like_anime_name,
     build_caption_metadata,
+    choose_media_title_seed,
     extract_metadata_from_filename,
     get_final_poster_url,
     get_video_thumbnail,
@@ -423,11 +424,12 @@ async def _imdb_search(title, year=None):
 
 
 async def _metadata(filename, filepath=None, user_dict=None, file_caption="", link=""):
-    base = await extract_metadata_from_filename(filename, filepath)
-    title = _clean_search_title(filename, base.get("title") or "")
+    seed = choose_media_title_seed(filename, file_caption=file_caption, link=link)
+    base = await extract_metadata_from_filename(seed, filepath)
+    title = _clean_search_title(seed, base.get("title") or "")
     if not title or title.lower() == "unknown":
-        title = _clean_search_title(filename)
-    anime_hint = _looks_like_anime_name(filename, title)
+        title = _clean_search_title(seed)
+    anime_hint = _looks_like_anime_name(seed, title)
 
     provider = {}
     if anime_hint:
@@ -442,7 +444,7 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         provider = _merge_missing(provider, await _imdb_search(title, base.get("year")))
 
     tv_hint = bool(
-        search(r"(?i)(?:\bS\d{1,2}\s*E\d{1,4}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)", filename)
+        search(r"(?i)(?:\bS\d{1,2}\s*E\d{1,4}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)", seed)
     )
     data = {
         "provider": "",
@@ -477,7 +479,7 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
     }
     data.update({k: v for k, v in provider.items() if v not in (None, "")})
     caption_data = await build_caption_metadata(
-        filename,
+        seed,
         filepath,
         file_caption=file_caption,
         link=link,
@@ -728,13 +730,22 @@ async def generate_task_poster(
     user_id,
     user_dict=None,
     file_caption="",
+    first_file="",
+    custom_name="",
     link="",
     as_doc=False,
 ):
     user_dict = user_dict or {}
     if not is_auto_poster_enabled(user_dict):
         return None
-    metadata = await _metadata(filename, filepath, user_dict, file_caption, link)
+    poster_seed = choose_media_title_seed(
+        filename,
+        first_file=first_file,
+        file_caption=file_caption,
+        custom_name=custom_name,
+        link=link,
+    )
+    metadata = await _metadata(poster_seed, filepath, user_dict, file_caption, link)
     template = str(_cfg(user_dict, "POST_TEMPLATE_ID", 1) or 1)
     if template not in {str(i) for i in range(1, POSTER_TEMPLATE_COUNT + 1)}:
         template = "1"

@@ -63,7 +63,7 @@ TEMPLATE_VARIABLES_TEXT = (
     "{year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} "
     "{shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} "
     "{acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} "
-    "{dynamic_range} {release_group} {group}"
+    "{dynamic_range} {release_group} {group} {start} {end} {range}"
 )
 
 leech_options = [
@@ -92,7 +92,6 @@ auto_process_options = [
     "AUTO_KEEP_SUBTITLE_LANGS",
     "AUTO_AUDIO_ORDER",
     "AUTO_SUBTITLE_ORDER",
-    "AUTO_MERGE_FILENAME",
     "INTRO_SUBTITLE_RANGES",
 ]
 uphoster_options = [
@@ -209,11 +208,6 @@ user_settings_text = {
         "",
         "Subtitle language order for Auto Process.",
         "Send subtitle language short codes separated by spaces. Example: <code>eng tam</code>.\n<b>Time Left:</b> <code>60 sec</code>",
-    ),
-    "AUTO_MERGE_FILENAME": (
-        "",
-        "Optional basename/template for Auto Merge output.",
-        "Send a merge filename template. Example: <code>{title} {resolution} {bit}</code>. The bot adds <code>[S1-EP(01-06)]</code> automatically.</i> \nâ”– <b>Time Left :</b> <code>60 sec</code>",
     ),
     "RCLONE_PATH": (
         "",

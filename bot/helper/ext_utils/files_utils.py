@@ -1,13 +1,15 @@
 from aioshutil import rmtree as aiormtree, move
 from asyncio import create_subprocess_exec, sleep, wait_for
 from asyncio.subprocess import PIPE
+from contextlib import suppress
 from psutil import disk_usage
 from os import path as ospath, readlink, walk
-from re import I, escape, search as re_search, split as re_split
+from re import I, escape, search as re_search, split as re_split, sub as re_sub
 
 from aiofiles.os import (
     listdir,
     remove,
+    rename,
     rmdir,
     symlink,
     makedirs as aiomakedirs,
@@ -133,6 +135,97 @@ async def is_supported_archive(file):
         return mime in archive_mimes
     except Exception:
         return False
+
+
+async def is_video_file(file):
+    if not await aiopath.isfile(file):
+        return False
+    try:
+        result = await cmd_exec(
+            [
+                "ffprobe",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                file,
+            ]
+        )
+        return result[2] == 0 and "video" in (result[0] or "").lower()
+    except Exception:
+        return False
+
+
+async def ensure_media_extension(file):
+    if not await aiopath.isfile(file):
+        return file
+    if ospath.splitext(file)[1]:
+        return file
+    if not await is_video_file(file):
+        return file
+    target = f"{file}.mkv"
+    if await aiopath.exists(target):
+        await remove(target)
+    await rename(file, target)
+    LOGGER.info(f"No-extension media detected. Renamed to: {target}")
+    return target
+
+
+def _split_join_target(name):
+    lower = name.lower()
+    if re_search(r"\.zip\.0*1$", lower):
+        return re_sub(r"\.0*1$", "", name, flags=I)
+    if re_search(r"\.0*1$", lower):
+        return re_sub(r"\.0*1$", "", name, flags=I)
+    return ""
+
+
+async def join_split_zip_files(opath):
+    if not await aiopath.isdir(opath):
+        return []
+    files = await listdir(opath)
+    groups = {}
+    for file_ in files:
+        lower = file_.lower()
+        if not re_search(r"(?:\.zip)?\.\d{3}$", lower):
+            continue
+        base = _split_join_target(file_) or file_.rsplit(".", 1)[0]
+        groups.setdefault(base, []).append(file_)
+
+    joined = []
+    for base, parts in groups.items():
+        if len(parts) < 2 or not any(re_search(r"\.0*1$", part.lower()) for part in parts):
+            continue
+        parts.sort(key=lambda item: int(item.rsplit(".", 1)[1]))
+        target = ospath.join(opath, base)
+        LOGGER.info(f"Joining multipart archive: {base} from {len(parts)} part(s)")
+        if await aiopath.exists(target):
+            await remove(target)
+        try:
+            await sync_to_async(_join_files_blocking, target, [ospath.join(opath, part) for part in parts])
+        except Exception as e:
+            LOGGER.error(f"Failed to join multipart archive {base}: {e}")
+            if await aiopath.exists(target):
+                await remove(target)
+            continue
+        joined.append(target)
+        for part in parts:
+            with suppress(Exception):
+                await remove(ospath.join(opath, part))
+    return joined
+
+
+def _join_files_blocking(target, parts):
+    with open(target, "wb") as out:
+        for part in parts:
+            with open(part, "rb") as src:
+                while chunk := src.read(1024 * 1024):
+                    out.write(chunk)
 
 
 async def clean_target(opath):

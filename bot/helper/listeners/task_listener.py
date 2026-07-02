@@ -3,7 +3,7 @@ from html import escape
 from time import time
 from mimetypes import guess_type
 from contextlib import suppress
-from os import path as ospath
+from os import path as ospath, walk
 
 from aiofiles.os import listdir, remove, path as aiopath
 from requests import utils as rutils
@@ -33,8 +33,10 @@ from ..ext_utils.files_utils import (
     clean_download,
     clean_target,
     create_recursive_symlink,
+    ensure_media_extension,
     get_path_size,
     join_files,
+    join_split_zip_files,
     remove_excluded_files,
     move_and_merge,
 )
@@ -68,6 +70,32 @@ from ..telegram_helper.message_utils import (
     send_message,
     update_status_message,
 )
+
+_VIDEO_EXTENSIONS = {
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".flv",
+    ".webm",
+    ".m4v",
+    ".ts",
+    ".m2ts",
+}
+
+
+async def _first_video_name(path):
+    if await aiopath.isfile(path):
+        name = ospath.basename(path)
+        return name if ospath.splitext(name)[1].lower() in _VIDEO_EXTENSIONS else ""
+    if not await aiopath.isdir(path):
+        return ""
+    for dirpath, _, names in await sync_to_async(walk, path):
+        for name in sorted(names, key=str.lower):
+            if ospath.splitext(name)[1].lower() in _VIDEO_EXTENSIONS:
+                return name
+    return ""
 
 
 class TaskListener(TaskConfig):
@@ -226,6 +254,13 @@ class TaskListener(TaskConfig):
         self.size = await get_path_size(dl_path)
         self.is_file = await aiopath.isfile(dl_path)
 
+        if self.is_file:
+            normalized_path = await ensure_media_extension(dl_path)
+            if normalized_path != dl_path:
+                dl_path = normalized_path
+                self.name = ospath.basename(dl_path)
+                self.size = await get_path_size(dl_path)
+
         if self.seed:
             up_dir = self.up_dir = f"{self.dir}10000"
             up_path = f"{self.up_dir}/{self.name}"
@@ -245,6 +280,13 @@ class TaskListener(TaskConfig):
             process_auto_pipeline,
         )
 
+        if getattr(self, "zip_merge", False) and await aiopath.isdir(up_path):
+            joined = await join_split_zip_files(up_path)
+            if joined:
+                self.extract = True
+                first = ospath.basename(joined[0])
+                self.file_details.setdefault("filename", first)
+
         await maybe_enable_auto_unzip(self, up_path)
 
         if not Config.QUEUE_ALL:
@@ -260,11 +302,19 @@ class TaskListener(TaskConfig):
             up_path = await self.proceed_extract(up_path, gid)
             if self.is_cancelled:
                 return
+            if await aiopath.isfile(up_path):
+                up_path = await ensure_media_extension(up_path)
             self.is_file = await aiopath.isfile(up_path)
             self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
             self.size = await get_path_size(up_dir)
             self.clear()
             await remove_excluded_files(up_dir, self.excluded_extensions)
+
+        first_video = await _first_video_name(up_path)
+        if first_video:
+            self.file_details["first_file"] = first_video
+            if not self.file_details.get("filename"):
+                self.file_details["filename"] = first_video
 
         if auto_enabled(self) and not self.video_tool and not self.is_cancelled:
             up_path = await process_auto_pipeline(self, up_path, gid)
@@ -445,6 +495,8 @@ class TaskListener(TaskConfig):
                     self.user_id,
                     self.user_dict,
                     file_caption=getattr(self, "file_details", {}).get("caption", ""),
+                    first_file=getattr(self, "file_details", {}).get("first_file", ""),
+                    custom_name=getattr(self, "custom_name", ""),
                     link=getattr(self, "source_url", ""),
                     as_doc=self.as_doc,
                 )

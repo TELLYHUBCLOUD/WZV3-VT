@@ -80,6 +80,13 @@ leech_options = [
     "SUBTITLE_TRANSLATE_TARGET",
     "INTRO_SUBTITLE_TEXT",
 ]
+post_options = [
+    "POST_MOVIE_CAPTION",
+    "POST_ANIME_CAPTION",
+    "POST_TV_CAPTION",
+    "POST_BRAND_NAME",
+    "POST_LOGO",
+]
 auto_process_options = [
     "AUTO_KEEP_AUDIO_LANGS",
     "AUTO_KEEP_SUBTITLE_LANGS",
@@ -404,6 +411,30 @@ user_settings_text["lremname_auto"] = (
     "<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {bit} {DS4K} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n"
     "<b>Timeout:</b> 60 sec",
 )
+for _post_key, _post_title in {
+    "POST_MOVIE_CAPTION": "Movie Post Caption",
+    "POST_ANIME_CAPTION": "Anime Post Caption",
+    "POST_TV_CAPTION": "TV Post Caption",
+}.items():
+    user_settings_text[_post_key] = (
+        "Telegram HTML",
+        f"{_post_title} supports Telegram HTML and poster placeholders.",
+        "Send caption template.\n"
+        "<b>Variables:</b> <code>{name} {title} {year} {season} {episode} {episodes} "
+        "{genres} {rating} {status} {plot} {synopsis} {quality} {resolution} "
+        "{bit} {codec} {audio} {subtitles} {shortlang} {shortsub}</code>\n"
+        "<b>Timeout:</b> 60 sec",
+    )
+user_settings_text["POST_BRAND_NAME"] = (
+    "String",
+    "Brand text drawn on generated poster images.",
+    "Send poster brand name.\n<b>Timeout:</b> 60 sec",
+)
+user_settings_text["POST_LOGO"] = (
+    "Photo or Doc",
+    "Optional logo drawn in the poster corner.",
+    "Send a photo/document logo image.\n<b>Timeout:</b> 60 sec",
+)
 
 
 async def get_user_settings(from_user, stype="main"):
@@ -420,6 +451,7 @@ async def get_user_settings(from_user, stype="main"):
         )
         buttons.data_button("Mirror Settings", f"userset {user_id} mirror")
         buttons.data_button("Leech Settings", f"userset {user_id} leech")
+        buttons.data_button("Post Settings", f"userset {user_id} post")
         buttons.data_button("Auto Process", f"userset {user_id} autoprocess")
         buttons.data_button("FF Media Settings", f"userset {user_id} ffset")
         buttons.data_button("User Settings Zip", f"userset {user_id} zip")
@@ -440,6 +472,9 @@ async def get_user_settings(from_user, stype="main"):
                 "HYBRID_LEECH",
                 "STOP_DUPLICATE",
                 "DEFAULT_UPLOAD",
+                "AUTO_POSTER_ENABLED",
+                "AUTO_POSTER_USE_AS_THUMBNAIL",
+                "POST_TEMPLATE_ID",
             ]
         ):
             buttons.data_button(
@@ -917,6 +952,67 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
 ┠ Subtitle Target → <code>{escape(subtitle_target)}</code>
 ┖ Intro Subtitle → <code>{escape(intro_subtitle)}</code>
 """
+
+    elif stype == "post":
+        def enabled(key, default=False):
+            value = user_dict.get(key) if key in user_dict else getattr(Config, key, default)
+            return config_bool(value, default)
+
+        def tick(key, default=False):
+            return "âœ… " if enabled(key, default) else ""
+
+        template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
+        if template_id not in {"1", "2", "3", "4", "5"}:
+            template_id = "1"
+        brand = user_dict.get("POST_BRAND_NAME") or Config.POST_BRAND_NAME or "Anime Starfall"
+        logo = user_dict.get("POST_LOGO") or Config.POST_LOGO or ""
+        logo_msg = "Exists" if logo and (str(logo).startswith(("http://", "https://")) or await aiopath.exists(str(logo))) else "Not Exists"
+
+        buttons.data_button(
+            f"{tick('AUTO_POSTER_ENABLED')}Auto Poster",
+            f"userset {user_id} tog AUTO_POSTER_ENABLED {'f' if enabled('AUTO_POSTER_ENABLED') else 't'}",
+        )
+        buttons.data_button(
+            f"{tick('AUTO_POSTER_USE_AS_THUMBNAIL', True)}Use As Thumbnail",
+            f"userset {user_id} tog AUTO_POSTER_USE_AS_THUMBNAIL {'f' if enabled('AUTO_POSTER_USE_AS_THUMBNAIL', True) else 't'}",
+        )
+        buttons.data_button("Template", f"userset {user_id} posttemplate")
+        buttons.data_button("Movie Caption", f"userset {user_id} menu POST_MOVIE_CAPTION")
+        buttons.data_button("Anime Caption", f"userset {user_id} menu POST_ANIME_CAPTION")
+        buttons.data_button("TV Caption", f"userset {user_id} menu POST_TV_CAPTION")
+        buttons.data_button("Brand Name", f"userset {user_id} menu POST_BRAND_NAME")
+        buttons.data_button("Logo", f"userset {user_id} menu POST_LOGO")
+        buttons.data_button("Back", f"userset {user_id} back", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(2)
+
+        text = f"""<b>Post Settings</b>
+Name: {user_name}
+
+Auto Poster: <b>{'Enabled' if enabled('AUTO_POSTER_ENABLED') else 'Disabled'}</b>
+Use Poster As Thumbnail: <b>{'Enabled' if enabled('AUTO_POSTER_USE_AS_THUMBNAIL', True) else 'Disabled'}</b>
+Template: <b>{template_id}/5</b>
+Brand: <code>{escape(str(brand))}</code>
+Logo: <b>{logo_msg}</b>
+
+Use /poster or /p to manually search and save a thumbnail style.
+"""
+
+    elif stype == "posttemplate":
+        template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
+        for i in range(1, 6):
+            prefix = "âœ… " if template_id == str(i) else ""
+            buttons.data_button(
+                f"{prefix}Template {i}",
+                f"userset {user_id} posttemplateset {i}",
+            )
+        buttons.data_button("Back", f"userset {user_id} post", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(2)
+        text = f"""<b>Poster Template</b>
+
+Choose one of the five stable 1280x720 poster styles.
+Current: <b>{escape(template_id)}</b>"""
 
     elif stype == "autoprocess":
         def enabled(key):
@@ -1434,6 +1530,11 @@ async def add_file(_, message, ftype, rfunc):
         await makedirs(cpath, exist_ok=True)
         des_dir = f"{cpath}/cookies.txt"
         await message.download(file_name=des_dir)
+    elif ftype == "POST_LOGO":
+        ppath = f"{getcwd()}/posters/{user_id}"
+        await makedirs(ppath, exist_ok=True)
+        des_dir = f"{ppath}/logo.png"
+        await message.download(file_name=des_dir)
     await delete_message(message)
     update_user_ldata(user_id, ftype, des_dir)
     await rfunc()
@@ -1747,10 +1848,11 @@ async def get_menu(option, message, user_id):
         "RCLONE_CONFIG": f"rclone/{user_id}.conf",
         "TOKEN_PICKLE": f"tokens/{user_id}.pickle",
         "USER_COOKIE_FILE": f"cookies/{user_id}/cookies.txt",
+        "POST_LOGO": f"posters/{user_id}/logo.png",
     }
 
     buttons = ButtonMaker()
-    if option in ["THUMBNAIL", "RCLONE_CONFIG", "TOKEN_PICKLE", "USER_COOKIE_FILE"]:
+    if option in ["THUMBNAIL", "RCLONE_CONFIG", "TOKEN_PICKLE", "USER_COOKIE_FILE", "POST_LOGO"]:
         key = "file"
     else:
         key = "set"
@@ -1787,6 +1889,8 @@ async def get_menu(option, message, user_id):
         back_to = "gdrive"
     elif option in yt_options:
         back_to = "yttools"
+    elif option in post_options:
+        back_to = "post"
     elif option in ffset_options:
         back_to = "ffset"
     elif option in advanced_options:
@@ -1987,6 +2091,7 @@ async def edit_user_settings(client, query):
     rclone_conf = f"rclone/{user_id}.conf"
     token_pickle = f"tokens/{user_id}.pickle"
     yt_cookie_path = f"cookies/{user_id}/cookies.txt"
+    post_logo_path = f"posters/{user_id}/logo.png"
 
     user_dict = user_data.get(user_id, {})
     if user_id != int(data[1]):
@@ -2041,11 +2146,19 @@ async def edit_user_settings(client, query):
         "pixeldrain",
         "ffset",
         "advanced",
+        "post",
+        "posttemplate",
         "gdrive",
         "rclone",
     ]:
         await query.answer()
         await update_user_settings(query, data[2])
+    elif data[2] == "posttemplateset":
+        await query.answer("Template saved.", show_alert=True)
+        template_id = data[3] if len(data) > 3 and data[3] in {"1", "2", "3", "4", "5"} else "1"
+        update_user_ldata(user_id, "POST_TEMPLATE_ID", int(template_id))
+        await database.update_user_data(user_id)
+        await update_user_settings(query, "posttemplate")
     elif data[2] in [
         "helperpinset",
         "helperunlock",
@@ -2188,6 +2301,8 @@ async def edit_user_settings(client, query):
             back_to = "gdrive"
         elif data[3] in ["USER_TOKENS", "USE_DEFAULT_COOKIE"]:
             back_to = "general"
+        elif data[3] in ["AUTO_POSTER_ENABLED", "AUTO_POSTER_USE_AS_THUMBNAIL"]:
+            back_to = "post"
         elif data[3].startswith("AUTO_") and data[3] != "AUTO_THUMBNAIL":
             back_to = "autoprocess"
         else:
@@ -2211,8 +2326,8 @@ async def edit_user_settings(client, query):
             query,
             pfunc,
             rfunc,
-            photo=data[3] == "THUMBNAIL",
-            document=data[3] != "THUMBNAIL",
+            photo=data[3] in ["THUMBNAIL", "POST_LOGO"],
+            document=data[3] not in ["THUMBNAIL", "POST_LOGO"],
         )
     elif data[2] == "arcreate":
         await query.answer()
@@ -2257,6 +2372,7 @@ async def edit_user_settings(client, query):
             "RCLONE_CONFIG",
             "TOKEN_PICKLE",
             "USER_COOKIE_FILE",
+            "POST_LOGO",
         ]:
             if data[3] == "THUMBNAIL":
                 fpath = thumb_path
@@ -2264,6 +2380,8 @@ async def edit_user_settings(client, query):
                 fpath = rclone_conf
             elif data[3] == "USER_COOKIE_FILE":
                 fpath = yt_cookie_path
+            elif data[3] == "POST_LOGO":
+                fpath = post_logo_path
             else:
                 fpath = token_pickle
             if await aiopath.exists(fpath):
@@ -2294,7 +2412,7 @@ async def edit_user_settings(client, query):
             for k in list(user_dict.keys()):
                 if k not in ("SUDO", "AUTH", "VERIFY_TOKEN", "VERIFY_TIME"):
                     del user_dict[k]
-            for fpath in [thumb_path, rclone_conf, token_pickle, yt_cookie_path]:
+            for fpath in [thumb_path, rclone_conf, token_pickle, yt_cookie_path, post_logo_path]:
                 if await aiopath.exists(fpath):
                     await remove(fpath)
             await update_user_settings(query)

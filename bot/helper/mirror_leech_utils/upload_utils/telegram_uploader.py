@@ -376,6 +376,29 @@ class TelegramUploader:
                 )
             )[-1]
 
+    async def _send_auto_post(self):
+        if getattr(self._listener, "hanime_letter_leech", False):
+            return
+        post = getattr(self._listener, "auto_post", None)
+        if not post:
+            return
+        path = post.get("path")
+        if not path or not await aiopath.exists(path):
+            return
+        try:
+            caption = post.get("caption") or "<b>Poster</b>"
+            target = self._sent_msg or self._listener.message
+            sent = await send_message(target, caption, photo=path)
+            if sent:
+                self._sent_msg = sent
+                if (
+                    (self._listener.is_super_chat or self._listener.up_dest)
+                    and not self._is_private
+                ):
+                    self._queue_deferred_copy(sent)
+        except Exception as err:
+            LOGGER.warning(f"Failed to send auto poster: {err}", exc_info=True)
+
     async def _send_media_group(self, subkey, key, msgs):
         for index, msg in enumerate(msgs):
             if self._listener.hybrid_leech or not self._user_session:
@@ -493,6 +516,7 @@ class TelegramUploader:
         res = await self._msg_to_reply()
         if not res:
             return
+        await self._send_auto_post()
         is_log_del = False
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
             if dirpath.strip().endswith("/yt-dlp-thumb"):

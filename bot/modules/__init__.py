@@ -33,6 +33,7 @@ from .restart import (
     restart_sessions,
 )
 from .imdb import imdb_search, imdb_callback
+from .poster_search import poster_search, poster_select
 from .rss import get_rss_menu, rss_listener
 from .search import torrent_search, torrent_search_update, initiate_search_tools
 from .nzb_search import hydra_search
@@ -92,6 +93,8 @@ __all__ = [
     "restart_sessions",
     "imdb_search",
     "imdb_callback",
+    "poster_search",
+    "poster_select",
     "get_rss_menu",
     "rss_listener",
     "torrent_search",

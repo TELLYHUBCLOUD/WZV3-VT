@@ -46,6 +46,32 @@ HANIME_LETTER_MAX = 0  # 0 means no limit
 HANIME_LETTER_DELAY = 2
 HANIME_QUALITY_TIMEOUT = 1800  # Per quality max seconds before cancelling a dead CDN stream
 HANIME_FORCE_INTRO_SUBTITLE = True
+AUTO_POSTER_ENABLED = False
+AUTO_POSTER_USE_AS_THUMBNAIL = True
+POST_TEMPLATE_ID = 1  # 1..5
+POST_BRAND_NAME = "Anime Starfall"
+POST_LOGO = ""  # local path or URL
+POST_MOVIE_CAPTION = """<b>{title}</b> ({year})
+
+Quality: <code>{quality} {resolution} {bit} {codec}</code>
+Audio: <code>{audio}</code>
+Subtitles: <code>{subtitles}</code>
+
+<blockquote expandable>{plot}</blockquote>"""
+POST_ANIME_CAPTION = """<b>{title}</b>
+
+Quality: <code>{quality} {resolution} {bit} {codec}</code>
+Audio: <code>{audio}</code>
+Subtitles: <code>{subtitles}</code>
+
+<blockquote expandable>{synopsis}</blockquote>"""
+POST_TV_CAPTION = """<b>{title}</b> S{season}E{episode}
+
+Quality: <code>{quality} {resolution} {bit} {codec}</code>
+Audio: <code>{audio}</code>
+Subtitles: <code>{subtitles}</code>
+
+<blockquote expandable>{plot}</blockquote>"""
 USE_SERVICE_ACCOUNTS = False
 NAME_SWAP = ""
 FFMPEG_CMDS = {

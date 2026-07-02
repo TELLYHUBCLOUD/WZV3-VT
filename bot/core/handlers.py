@@ -323,6 +323,16 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            poster_search,
+            filters=command(BotCommands.PosterCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(poster_select, filters=regex("^psel"))
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             ping,
             filters=command(BotCommands.PingCommand, case_sensitive=True)
             & CustomFilters.authorized,

@@ -45,6 +45,7 @@ class BotCommands:
         "Exec": "exec",
         "ClearLocals": "clearlocals",
         "IMDB": "imdb",
+        "Poster": ["poster", "p"],
         "Rss": "rss",
         "Authorize": ["authorize", "a"],
         "UnAuthorize": ["unauthorize", "ua"],

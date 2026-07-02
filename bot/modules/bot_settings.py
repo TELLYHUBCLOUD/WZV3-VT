@@ -136,6 +136,32 @@ DEFAULT_VALUES = {
     "HANIME_LETTER_DELAY": 2,
     "HANIME_QUALITY_TIMEOUT": 1800,
     "HANIME_FORCE_INTRO_SUBTITLE": True,
+    "AUTO_POSTER_ENABLED": False,
+    "AUTO_POSTER_USE_AS_THUMBNAIL": True,
+    "POST_TEMPLATE_ID": 1,
+    "POST_BRAND_NAME": "Anime Starfall",
+    "POST_LOGO": "",
+    "POST_MOVIE_CAPTION": (
+        "<b>{title}</b> ({year})\n\n"
+        "Quality: <code>{quality} {resolution} {bit} {codec}</code>\n"
+        "Audio: <code>{audio}</code>\n"
+        "Subtitles: <code>{subtitles}</code>\n\n"
+        "<blockquote expandable>{plot}</blockquote>"
+    ),
+    "POST_ANIME_CAPTION": (
+        "<b>{title}</b>\n\n"
+        "Quality: <code>{quality} {resolution} {bit} {codec}</code>\n"
+        "Audio: <code>{audio}</code>\n"
+        "Subtitles: <code>{subtitles}</code>\n\n"
+        "<blockquote expandable>{synopsis}</blockquote>"
+    ),
+    "POST_TV_CAPTION": (
+        "<b>{title}</b> S{season}E{episode}\n\n"
+        "Quality: <code>{quality} {resolution} {bit} {codec}</code>\n"
+        "Audio: <code>{audio}</code>\n"
+        "Subtitles: <code>{subtitles}</code>\n\n"
+        "<blockquote expandable>{plot}</blockquote>"
+    ),
     "CTORRENT_STORAGE_DIR": "/usr/src/app/torrents/seeding",
     "CTORRENT_OUTPUT_DIR": "/usr/src/app/torrents/output",
     "CTORRENT_TRACKERS": "udp://tracker.opentrackr.org:1337/announce\nudp://open.stealth.si:80/announce\nudp://tracker.torrent.eu.org:451/announce\nudp://open.demonii.com:1337/announce",

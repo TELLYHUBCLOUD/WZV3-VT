@@ -480,6 +480,7 @@ def get_bot_commands():
         "Stats": "Bot, OS, Repo & System full Statistics",
         "Rss": "User RSS Management Settings",
         "IMDB": "[query] or ttxxxxxx Get IMDB info",
+        "Poster": "[query/reply] Search and save edited poster thumbnail",
         "CancelAll": "Cancel all Tasks on the Bot",
         "Help": "Detailed help usage of the WZ Bot",
         "BotSet": "[SUDO] Bot Management Settings",

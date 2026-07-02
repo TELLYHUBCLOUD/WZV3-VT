@@ -427,38 +427,37 @@ class TaskListener(TaskConfig):
             )
             del yt
         elif self.is_leech:
-            if not getattr(self, "hanime_letter_leech", False):
-                try:
-                    from ..poster_engine import generate_task_poster
+            try:
+                from ..poster_engine import generate_task_poster
 
-                    def _poster_bool(value, default=False):
-                        if isinstance(value, bool):
-                            return value
-                        if value is None:
-                            return default
-                        text = str(value).strip().lower()
-                        return text in {"1", "true", "yes", "y", "on"} if text else default
+                def _poster_bool(value, default=False):
+                    if isinstance(value, bool):
+                        return value
+                    if value is None:
+                        return default
+                    text = str(value).strip().lower()
+                    return text in {"1", "true", "yes", "y", "on"} if text else default
 
-                    poster_path = up_path if self.is_file else ""
-                    poster_payload = await generate_task_poster(
-                        self.name,
-                        poster_path,
-                        self.user_id,
-                        self.user_dict,
-                        file_caption=getattr(self, "file_details", {}).get("caption", ""),
-                        link=getattr(self, "source_url", ""),
-                        as_doc=self.as_doc,
+                poster_path = up_path if self.is_file else ""
+                poster_payload = await generate_task_poster(
+                    self.name,
+                    poster_path,
+                    self.user_id,
+                    self.user_dict,
+                    file_caption=getattr(self, "file_details", {}).get("caption", ""),
+                    link=getattr(self, "source_url", ""),
+                    as_doc=self.as_doc,
+                )
+                if poster_payload:
+                    self.auto_post = poster_payload
+                    use_poster_thumb = self.user_dict.get(
+                        "AUTO_POSTER_USE_AS_THUMBNAIL",
+                        Config.AUTO_POSTER_USE_AS_THUMBNAIL,
                     )
-                    if poster_payload:
-                        self.auto_post = poster_payload
-                        use_poster_thumb = self.user_dict.get(
-                            "AUTO_POSTER_USE_AS_THUMBNAIL",
-                            Config.AUTO_POSTER_USE_AS_THUMBNAIL,
-                        )
-                        if _poster_bool(use_poster_thumb, True):
-                            self.thumb = poster_payload.get("path") or self.thumb
-                except Exception as e:
-                    LOGGER.warning(f"Auto poster generation failed: {e}", exc_info=True)
+                    if _poster_bool(use_poster_thumb, True):
+                        self.thumb = poster_payload.get("path") or self.thumb
+            except Exception as e:
+                LOGGER.warning(f"Auto poster generation failed: {e}", exc_info=True)
             LOGGER.info(f"Leech Name: {self.name}")
             tg = TelegramUploader(self, up_dir)
             async with task_dict_lock:

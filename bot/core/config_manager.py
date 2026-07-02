@@ -51,28 +51,8 @@ class Config:
     DISABLE_SEARCH = False
     DISABLE_YTDLP = False
     MX_PLAYER_API_BASE = "internal"
-    HANIME_API_BASE = "internal"
     SITE_QUALITY_SELECTOR_TIMEOUT = 120
     MX_DEFAULT_AUDIO = "ask"
-    HANIME_LETTER = ""
-    HANIME_DUMP_CHAT = ""
-    HANIME_UPLOAD_BOT_TOKEN = ""
-    HANIME_DOWNLOAD = False
-    HANIME_POST_TEMPLATE = (
-        "<b>{title}</b>\n\n"
-        "‣ Views : <code>{views}</code>\n"
-        "‣ Downloads : <code>{downloads}</code>\n"
-        "‣ Rank : <code>{rank}</code>\n"
-        "‣ Uploaded: <code>{upload_date}</code>\n"
-        "‣ Studio : <code>{studio}</code>\n\n"
-        "~ Genres : <i>{genres}</i>\n\n"
-        "<blockquote expandable>‣ Synopsis : {synopsis}</blockquote>"
-    )
-    HANIME_BRAND_TEXT = "Anime Starfall"
-    HANIME_LETTER_MAX = 0
-    HANIME_LETTER_DELAY = 2
-    HANIME_QUALITY_TIMEOUT = 1800
-    HANIME_FORCE_INTRO_SUBTITLE = True
     AUTO_POSTER_ENABLED = False
     AUTO_POSTER_USE_AS_THUMBNAIL = True
     POST_TEMPLATE_ID = 1

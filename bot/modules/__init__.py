@@ -43,7 +43,6 @@ from .stats import bot_stats, stats_pages, get_packages_version
 from .status import task_status, status_pages
 from .users_settings import get_users_settings, edit_user_settings, send_user_settings
 from .ytdlp import ytdl, ytdl_leech
-from .hanime_letter_leech import hanime_letter_leech
 from .video_tool_ui import video_tools_callback
 from ..helper.video_utils.video_tools import (
     active_merge_track_filter,
@@ -121,7 +120,6 @@ __all__ = [
     "send_user_settings",
     "ytdl",
     "ytdl_leech",
-    "hanime_letter_leech",
     "video_tools_callback",
     "active_merge_track_filter",
     "video_tools_media_collector",

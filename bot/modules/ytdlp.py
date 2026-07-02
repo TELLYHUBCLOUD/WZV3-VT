@@ -38,9 +38,6 @@ SITE_OPTION_KEYS = {
     "MX_PLAYER_API_BASE",
     "mx_audio",
     "mx_quality",
-    "hanime_api_base",
-    "HANIME_API_BASE",
-    "hanime_quality",
 }
 
 
@@ -298,11 +295,6 @@ class SiteSelection:
             if result:
                 return result
             await self._show_mx_videos()
-        else:
-            result = self._preset_hanime_result()
-            if result:
-                return result
-            await self._show_hanime_streams()
         await self._event_handler()
         if not self.listener.is_cancelled and self._reply_to:
             await delete_message(self._reply_to)
@@ -343,23 +335,6 @@ class SiteSelection:
                 or any(w in str(item.get("label", "")).lower() for w in wanted)
             ]
         return self._build_mx_result(videos, selected_audio)
-
-    def _preset_hanime_result(self):
-        desired = self._default_list("hanime_quality")
-        if not desired:
-            return None
-        if any(item in {"all", "*"} for item in desired):
-            streams = self.site_data.get("streams", [])
-        else:
-            streams = [
-                item
-                for item in self.site_data.get("streams", [])
-                if str(item.get("height") or "").lower() in desired
-                or str(item.get("label") or "").split("p", 1)[0].lower() in desired
-            ]
-        if not streams:
-            return None
-        return self._build_hanime_result(streams)
 
     async def _show_mx_videos(self):
         buttons = ButtonMaker()
@@ -407,27 +382,6 @@ class SiteSelection:
         )
         await edit_message(self._reply_to, text, buttons.build_menu(2))
 
-    async def _show_hanime_streams(self):
-        buttons = ButtonMaker()
-        streams = self.site_data.get("streams", [])
-        if not self.selected_videos and streams:
-            self.selected_videos.add(0)
-        for index, item in enumerate(streams[:25]):
-            mark = "[x]" if index in self.selected_videos else "[ ]"
-            buttons.data_button(f"{mark} {item['label']}", f"ytq site_hv {index}")
-        buttons.data_button("All Qualities", "ytq site_hvall")
-        buttons.data_button("Download", "ytq site_hdone", "footer")
-        buttons.data_button("Cancel", "ytq cancel", "footer")
-        text = (
-            f"Choose Hanime quality for:\n<b>{self.site_data['title']}</b>\n"
-            f"Tap multiple qualities if needed.\nTimeout: {self._timeout_text()}"
-        )
-        menu = buttons.build_menu(2)
-        if self._reply_to:
-            await edit_message(self._reply_to, text, menu)
-        else:
-            self._reply_to = await send_message(self.listener.message, text, menu)
-
     async def site_callback(self, data):
         action = data[0]
         if action == "site_mxv":
@@ -472,23 +426,6 @@ class SiteSelection:
             self.event.set()
         elif action == "site_mxaback":
             await self._show_mx_videos()
-        elif action == "site_hv":
-            index = int(data[1])
-            if index in self.selected_videos:
-                self.selected_videos.remove(index)
-            else:
-                self.selected_videos.add(index)
-            if not self.selected_videos:
-                self.selected_videos.add(index)
-            await self._show_hanime_streams()
-        elif action == "site_hvall":
-            self.selected_videos = set(range(len(self.site_data.get("streams", []))))
-            await self._show_hanime_streams()
-        elif action == "site_hdone":
-            self.qual = self._build_hanime_result(
-                [self.site_data["streams"][idx] for idx in sorted(self.selected_videos)]
-            )
-            self.event.set()
 
     def _build_mx_result(self, videos, audio_ids):
         if not videos:
@@ -502,21 +439,6 @@ class SiteSelection:
             "thumb": self.site_data.get("thumbnail") or "",
             "site": "mx",
             "options": {"allow_multiple_audio_streams": len(audio_ids) > 1},
-        }
-
-    def _build_hanime_result(self, streams):
-        if not streams:
-            streams = self.site_data.get("streams", [])[:1]
-        links = [item["url"] for item in streams]
-        return {
-            "link": links[0] if len(links) == 1 else links,
-            "qual": "best",
-            "name": self.site_data["title"],
-            "thumb": self.site_data.get("thumbnail") or "",
-            "site": "hanime",
-            "streams": streams,
-            "metadata": self.site_data,
-            "options": {},
         }
 
 
@@ -564,10 +486,6 @@ class YtDlp(TaskListener):
         self.options = options
         self.same_dir = same_dir
         self.bulk = bulk
-        self.hanime_letter_leech = bool(kwargs.get("hanime_letter_leech", False))
-        self.hanime_metadata = kwargs.get("hanime_metadata") or {}
-        self.hanime_quality = kwargs.get("hanime_quality") or ""
-        self.hanime_output_name = kwargs.get("hanime_output_name") or ""
         self.force_intro_subtitle = bool(kwargs.get("force_intro_subtitle", False))
         super().__init__()
         self.is_ytdlp = True
@@ -810,18 +728,10 @@ class YtDlp(TaskListener):
                 return
             self.link = selected["link"]
             qual = selected["qual"]
-            if selected.get("site") == "hanime":
-                self.skip_auto_rename = True
-                self.skip_auto_thumbnail = True
-                if not self.hanime_metadata:
-                    self.hanime_metadata = selected.get("metadata") or {}
-                streams = selected.get("streams") or []
-                if streams and not self.hanime_quality:
-                    self.hanime_quality = streams[0].get("label") or f"{streams[0].get('height')}p"
             if selected.get("name") and not self.name:
                 self.name = selected["name"]
                 self.custom_name = selected["name"]
-            if selected.get("thumb") and not self.thumb and not self.hanime_letter_leech:
+            if selected.get("thumb") and not self.thumb:
                 thumb = selected["thumb"]
                 if isinstance(thumb, str) and thumb.startswith(("http://", "https://")):
                     thumb = await download_image_thumb(thumb, landscape=True)
@@ -829,12 +739,6 @@ class YtDlp(TaskListener):
                     self.thumb = thumb
             if selected.get("options"):
                 download_opt = {**download_opt, **selected["options"]}
-            if self.hanime_letter_leech:
-                download_opt = {
-                    **download_opt,
-                    "merge_output_format": "mkv",
-                    "writethumbnail": False,
-                }
             await self.run_multi(input_list, YtDlp)
         else:
             try:

@@ -23,29 +23,8 @@ EXCLUDED_EXTENSIONS = ""
 INCOMPLETE_TASK_NOTIFIER = False
 YT_DLP_OPTIONS = ""
 MX_PLAYER_API_BASE = "internal"  # internal/local/builtin uses yt-dlp inside this bot. Or set https://host/mxplayer?url={url}
-HANIME_API_BASE = "internal"  # internal/local/builtin uses this bot. Or set https://host/hanime-api
 SITE_QUALITY_SELECTOR_TIMEOUT = 120
 MX_DEFAULT_AUDIO = "ask"  # ask, all, skip/none, or comma languages like hin,tam,eng
-HANIME_LETTER = ""  # Owner-only reserved bulk letter, example: A
-HANIME_DUMP_CHAT = ""  # Owner-only reserved dump channel/chat id
-HANIME_UPLOAD_BOT_TOKEN = ""  # Owner-only reserved upload bot token
-HANIME_DOWNLOAD = False  # Owner-only reserved switch for Hanime bulk automation
-HANIME_POST_TEMPLATE = """<b>{title}</b>
-
-‣ Views : <code>{views}</code>
-‣ Downloads : <code>{downloads}</code>
-‣ Rank : <code>{rank}</code>
-‣ Uploaded: <code>{upload_date}</code>
-‣ Studio : <code>{studio}</code>
-
-~ Genres : <i>{genres}</i>
-
-<blockquote expandable>‣ Synopsis : {synopsis}</blockquote>"""
-HANIME_BRAND_TEXT = "Anime Starfall"
-HANIME_LETTER_MAX = 0  # 0 means no limit
-HANIME_LETTER_DELAY = 2
-HANIME_QUALITY_TIMEOUT = 1800  # Per quality max seconds before cancelling a dead CDN stream
-HANIME_FORCE_INTRO_SUBTITLE = True
 AUTO_POSTER_ENABLED = False
 AUTO_POSTER_USE_AS_THUMBNAIL = True
 POST_TEMPLATE_ID = 1  # 1..6

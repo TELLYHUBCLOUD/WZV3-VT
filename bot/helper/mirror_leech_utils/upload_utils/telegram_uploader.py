@@ -35,7 +35,6 @@ from ....core.config_manager import Config
 from ....core.tg_client import TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
-from ...ext_utils.hanime_state import hanime_upload_slot
 from ...ext_utils.performance import get_tg_copy_delay, get_tg_flood_wait_multiplier
 from ...ext_utils.starfallx_upload import (
     private_dump_only,
@@ -129,8 +128,6 @@ class TelegramUploader:
 
         if self._thumb != "none" and not await aiopath.exists(self._thumb):
             self._thumb = None
-        if getattr(self._listener, "hanime_letter_leech", False):
-            self._thumb = None
 
     async def _msg_to_reply(self):
         if self._listener.up_dest:
@@ -197,13 +194,6 @@ class TelegramUploader:
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
-        hanime_name = getattr(self._listener, "hanime_output_name", "")
-        if getattr(self._listener, "hanime_letter_leech", False) and hanime_name:
-            if not ospath.splitext(hanime_name)[1]:
-                ext = ospath.splitext(pre_file_)[1] or ".mp4"
-                hanime_name = f"{hanime_name}{ext}"
-            file_ = cap_file_ = hanime_name
-
         # AutoRename logic: apply before prefix/suffix
         autorename_enabled = (
             self._listener.user_dict.get("AUTORENAME")
@@ -254,13 +244,13 @@ class TelegramUploader:
             except Exception as e:
                 LOGGER.warning(f"AutoRename failed for {pre_file_}: {e}")
 
-        if self._lprefix and not getattr(self._listener, "hanime_letter_leech", False):
+        if self._lprefix:
             cap_file_ = self._lprefix.replace(r"\s", " ") + file_
             self._lprefix = re_sub(r"<.*?>", "", self._lprefix).replace(r"\s", " ")
             if not file_.startswith(self._lprefix):
                 file_ = f"{self._lprefix}{file_}"
 
-        if self._lsuffix and not getattr(self._listener, "hanime_letter_leech", False):
+        if self._lsuffix:
             name, ext = ospath.splitext(cap_file_)
             cap_file_ = name + self._lsuffix.replace(r"\s", " ") + ext
             self._lsuffix = re_sub(r"<.*?>", "", self._lsuffix).replace(r"\s", " ")
@@ -330,7 +320,7 @@ class TelegramUploader:
                 ext = f"{self._lsuffix}{ext}"
             name = name[: 255 - len(ext)]
             file_ = f"{name}{ext}"
-        elif self._lsuffix and not getattr(self._listener, "hanime_letter_leech", False):
+        elif self._lsuffix:
             name, ext = ospath.splitext(file_)
             file_ = f"{name}{self._lsuffix}{ext}"
 
@@ -377,8 +367,6 @@ class TelegramUploader:
             )[-1]
 
     async def _send_auto_post(self):
-        if getattr(self._listener, "hanime_letter_leech", False):
-            return
         post = getattr(self._listener, "auto_post", None)
         if not post:
             return
@@ -508,10 +496,6 @@ class TelegramUploader:
                 )
 
     async def upload(self):
-        async with hanime_upload_slot(getattr(self._listener, "hanime_letter_leech", False)):
-            return await self._upload_unlocked()
-
-    async def _upload_unlocked(self):
         await self._user_settings()
         res = await self._msg_to_reply()
         if not res:

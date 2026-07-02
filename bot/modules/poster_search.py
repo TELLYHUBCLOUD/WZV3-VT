@@ -61,7 +61,7 @@ async def poster_search(_, message):
             return
         POSTER_SEARCH_CACHE[(message.from_user.id, wait.id)] = metadata
         buttons = ButtonMaker()
-        for i in range(1, 6):
+        for i in range(1, 7):
             buttons.data_button(f"Style {i}", f"psel {message.from_user.id} {wait.id} {i}")
         buttons.data_button("Close", f"psel {message.from_user.id} {wait.id} close", "footer")
         preview = await render_poster_option(metadata, message.from_user.id, user_dict, "1")

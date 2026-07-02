@@ -1,7 +1,7 @@
 from html import escape
 from io import BytesIO
 from os import path as ospath
-from re import search, sub
+from re import IGNORECASE, findall, search, sub
 from time import time
 
 from aiofiles.os import makedirs
@@ -14,7 +14,6 @@ from ...core.config_manager import Config
 from ..ext_utils.bot_utils import sync_to_async
 from ..ext_utils.media_utils import (
     _clean_title_from_filename,
-    _fetch_anilist_media,
     _looks_like_anime_name,
     build_caption_metadata,
     extract_metadata_from_filename,
@@ -24,6 +23,7 @@ from ..ext_utils.media_utils import (
 
 POSTER_SIZE = (1280, 720)
 TMDB_IMAGE = "https://image.tmdb.org/t/p/{size}{path}"
+POSTER_TEMPLATE_COUNT = 6
 
 
 def _bool(value, default=False):
@@ -50,6 +50,47 @@ def is_auto_poster_enabled(user_dict):
 def _safe_text(value, default=""):
     value = "" if value is None else str(value)
     return value.strip() or default
+
+
+def _clean_search_title(filename, extracted=""):
+    candidates = [extracted, filename]
+    for candidate in candidates:
+        text = _safe_text(candidate)
+        if not text:
+            continue
+        text = ospath.splitext(text)[0]
+        text = sub(r"\[@[^\]]+\]", " ", text)
+        text = sub(r"^\[(?!S\d{1,2}\s*E\d{1,4}\])[^]]+\]\s*", " ", text, flags=IGNORECASE)
+        text = sub(r"^(?:AS|A S|ANIME[ _.-]*STARFALL|STARFALL)[\s._:-]+", " ", text, flags=IGNORECASE)
+        text = sub(r"^[^\w\[]+", " ", text)
+        text = sub(r"\s+", " ", text).strip(" -_.")
+        cleaned = _clean_title_from_filename(text)
+        if len(findall(r"[A-Za-z0-9]", cleaned)) >= 2:
+            return cleaned
+    return _clean_title_from_filename(filename)
+
+
+def _missing(value):
+    return value in (None, "", "N/A", "None", "n/a")
+
+
+def _merge_missing(base, extra):
+    for key, value in (extra or {}).items():
+        if _missing(value):
+            continue
+        if _missing(base.get(key)):
+            base[key] = value
+    return base
+
+
+def _rating_number(value):
+    text = _safe_text(value)
+    match = search(r"(\d+(?:\.\d+)?)", text)
+    return match.group(1) if match else ""
+
+
+def _short_plot(data):
+    return data.get("plot") or data.get("synopsis") or data.get("genres") or ""
 
 
 def _font(size, bold=False):
@@ -156,6 +197,37 @@ def _paste_logo(canvas, logo_img):
     canvas.paste(logo, (1150, 42))
 
 
+def _genre_list(data, limit=3):
+    raw = _safe_text(data.get("genres"))
+    raw = raw.replace("#", "").replace("_", " ")
+    parts = [p.strip(" ,") for p in raw.split(",") if p.strip(" ,")]
+    if not parts and raw:
+        parts = raw.split()[:limit]
+    return parts[:limit]
+
+
+def _top_nav(draw, items, x=350, y=46, fill=(255, 255, 255), accent=(229, 45, 230)):
+    for idx, item in enumerate(items[:3]):
+        tx = x + idx * 150
+        draw.text((tx, y), item.upper(), font=_font(18, True), fill=fill)
+        if idx == 0:
+            draw.line((tx, y + 26, tx + 110, y + 26), fill=accent, width=3)
+
+
+def _rating_label(data):
+    rating = _rating_number(data.get("rating"))
+    return f"RATING: {rating}" if rating else "RATING"
+
+
+def _meta_line(data):
+    bits = [
+        data.get("studio"),
+        data.get("category", "").upper(),
+        data.get("year"),
+    ]
+    return " - ".join(_safe_text(x) for x in bits if _safe_text(x))
+
+
 async def _download_image(url):
     if not url:
         return None
@@ -203,6 +275,21 @@ async def _tmdb_search(title, year=None):
             return {}
         item = results[0]
         media_type = item.get("media_type") or "movie"
+        details = {}
+        try:
+            async with AsyncClient(timeout=12, headers=headers) as client:
+                detail_res = await client.get(
+                    f"https://api.themoviedb.org/3/{media_type}/{item.get('id')}",
+                    params={"language": "en-US"},
+                )
+            if detail_res.status_code == 200:
+                details = detail_res.json()
+        except Exception:
+            details = {}
+        genres = ", ".join(g.get("name", "") for g in details.get("genres", []) if g.get("name"))
+        studio = ""
+        if companies := details.get("production_companies"):
+            studio = companies[0].get("name") or ""
         return {
             "provider": "TMDb",
             "category": "tv" if media_type == "tv" else "movie",
@@ -212,8 +299,10 @@ async def _tmdb_search(title, year=None):
             "plot": item.get("overview") or "",
             "synopsis": item.get("overview") or "",
             "rating": f"{float(item.get('vote_average') or 0):.1f}" if item.get("vote_average") else "",
-            "status": "",
-            "genres": "",
+            "status": details.get("status") or "",
+            "genres": genres,
+            "studio": studio,
+            "first_aired": details.get("first_air_date") or details.get("release_date") or "",
             "landscape_url": _tmdb_url(item.get("backdrop_path"), "w1280"),
             "portrait_url": _tmdb_url(item.get("poster_path"), "w780"),
             "poster_url": _tmdb_url(item.get("poster_path"), "w780"),
@@ -224,13 +313,66 @@ async def _tmdb_search(title, year=None):
 
 
 async def _anime_search(title):
-    media = await _fetch_anilist_media(title)
+    query = """
+    query ($search: String!) {
+      Page(page: 1, perPage: 5) {
+        media(search: $search, type: ANIME) {
+          id
+          title { english romaji native }
+          bannerImage
+          coverImage { extraLarge large }
+          description(asHtml: false)
+          genres
+          seasonYear
+          averageScore
+          status
+          episodes
+          startDate { year month day }
+          studios(isMain: true) { nodes { name } }
+        }
+      }
+    }
+    """
+    media = {}
+    try:
+        async with AsyncClient(timeout=12) as client:
+            res = await client.post(
+                "https://graphql.anilist.co",
+                json={"query": query, "variables": {"search": title}},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0 StarFallX/1.2",
+                },
+            )
+        if res.status_code == 200:
+            results = (
+                res.json()
+                .get("data", {})
+                .get("Page", {})
+                .get("media")
+                or []
+            )
+            media = next((item for item in results if item.get("bannerImage")), None)
+            media = media or (results[0] if results else {})
+    except Exception as err:
+        LOGGER.warning(f"AniList poster search failed for '{title}': {err}")
     if not media:
         return {}
     names = media.get("title") or {}
     name = names.get("english") or names.get("romaji") or names.get("native") or title
     cover = media.get("coverImage") or {}
     genres = ", ".join(media.get("genres") or [])
+    score = media.get("averageScore")
+    rating = f"{score / 10:.1f}/10 - AniList" if score else ""
+    start = media.get("startDate") or {}
+    first_aired = "-".join(
+        str(start.get(k)).zfill(2 if k != "year" else 4)
+        for k in ("year", "month", "day")
+        if start.get(k)
+    )
+    studios = ((media.get("studios") or {}).get("nodes") or [])
+    studio = studios[0].get("name") if studios else ""
     return {
         "provider": "AniList",
         "category": "anime",
@@ -239,8 +381,11 @@ async def _anime_search(title):
         "year": str(media.get("seasonYear") or ""),
         "plot": sub(r"<.*?>", "", media.get("description") or ""),
         "synopsis": sub(r"<.*?>", "", media.get("description") or ""),
-        "rating": "",
-        "status": "",
+        "rating": rating,
+        "status": str(media.get("status") or "").replace("_", " ").title(),
+        "episodes": str(media.get("episodes") or ""),
+        "studio": studio,
+        "first_aired": first_aired,
         "genres": genres,
         "landscape_url": media.get("bannerImage") or "",
         "portrait_url": cover.get("extraLarge") or cover.get("large") or "",
@@ -252,20 +397,22 @@ async def _imdb_search(title, year=None):
     try:
         from ...modules.imdb import get_poster
 
-        data = await sync_to_async(get_poster, title, bulk=True, id=False, file=None)
+        data = await sync_to_async(get_poster, title, bulk=False, id=False, file=None)
         if not data:
             return {}
         return {
             "provider": "IMDb",
-            "category": "movie",
+            "category": "tv" if data.get("kind") == "Series" else "movie",
             "title": data.get("title") or title,
             "name": data.get("title") or title,
             "year": data.get("year") or year or "",
             "plot": data.get("plot") or data.get("storyline") or "",
             "synopsis": data.get("plot") or data.get("storyline") or "",
             "rating": data.get("rating") or "",
-            "status": "",
+            "status": data.get("kind") or "",
             "genres": ", ".join(data.get("genres") or []) if isinstance(data.get("genres"), list) else data.get("genres") or "",
+            "studio": data.get("production") or "",
+            "first_aired": data.get("release_date") or "",
             "landscape_url": "",
             "portrait_url": data.get("poster") or "",
             "poster_url": data.get("poster") or "",
@@ -277,9 +424,9 @@ async def _imdb_search(title, year=None):
 
 async def _metadata(filename, filepath=None, user_dict=None, file_caption="", link=""):
     base = await extract_metadata_from_filename(filename, filepath)
-    title = _clean_title_from_filename(base.get("title") or filename)
+    title = _clean_search_title(filename, base.get("title") or "")
     if not title or title.lower() == "unknown":
-        title = _clean_title_from_filename(filename)
+        title = _clean_search_title(filename)
     anime_hint = _looks_like_anime_name(filename, title)
 
     provider = {}
@@ -291,6 +438,8 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         provider = await _anime_search(title)
     if not provider:
         provider = await _imdb_search(title, base.get("year"))
+    elif not anime_hint:
+        provider = _merge_missing(provider, await _imdb_search(title, base.get("year")))
 
     tv_hint = bool(
         search(r"(?i)(?:\bS\d{1,2}\s*E\d{1,4}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)", filename)
@@ -308,6 +457,8 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         "genres": "",
         "rating": "",
         "status": "",
+        "studio": "",
+        "first_aired": "",
         "plot": "",
         "synopsis": "",
         "quality": base.get("quality", ""),
@@ -403,59 +554,118 @@ def _template_one(bg, side, data, logo):
 
 
 def _template_two(bg, side, data, logo):
-    canvas = _cover(bg, POSTER_SIZE).filter(ImageFilter.GaussianBlur(7))
-    canvas = _overlay_gradient(canvas, 210, 110)
+    canvas = _cover(bg, POSTER_SIZE).filter(ImageFilter.GaussianBlur(9))
+    canvas = _overlay_gradient(canvas, 205, 95)
     draw = ImageDraw.Draw(canvas)
-    _draw_brand(draw, data.get("brand"))
     _paste_logo(canvas, logo)
-    draw.text((58, 125), data.get("year") or "ANIME", font=_font(30, True), fill=(215, 215, 215))
-    _draw_wrapped(draw, (58, 182), data.get("title"), _font(66, True), "white", 610, 8, 3)
-    genres = data.get("genres") or data.get("quality") or ""
-    _draw_wrapped(draw, (58, 505), genres, _font(28), (235, 235, 235), 500, 6, 4)
-    _paste_rounded(canvas, side, (820, 88, 345, 500), 2, None)
+    _top_nav(draw, _genre_list(data) or ["Completed", "Adventure", "Fantasy"])
+    _draw_wrapped(draw, (58, 260), _safe_text(data.get("title")).upper(), _font(62, True), "white", 690, 8, 2)
+    draw.text((60, 332), _meta_line(data).upper(), font=_font(26, True), fill=(255, 255, 255))
+    draw.rounded_rectangle((40, 400, 640, 662), radius=30, fill=(60, 64, 70))
+    draw.rounded_rectangle((60, 425, 220, 485), radius=10, fill=(173, 31, 209))
+    draw.text((70, 446), "DOWNLOAD!!", font=_font(22, True), fill="white")
+    draw.rounded_rectangle((380, 425, 600, 485), radius=10, fill=(173, 31, 209))
+    draw.text((442, 446), _rating_label(data), font=_font(22, True), fill="white")
+    draw.polygon([(402, 452), (416, 452), (421, 435), (427, 452), (443, 452), (431, 462), (436, 478), (421, 468), (406, 478), (412, 462)], fill=(38, 226, 57))
+    _draw_wrapped(draw, (60, 515), _short_plot(data), _font(24, True), (220, 220, 220), 540, 6, 5)
+    _paste_rounded(canvas, side, (824, 86, 398, 590), 46, 7)
+    draw.text((585, 688), _safe_text(data.get("brand"), "Anime Starfall"), font=_font(18, True), fill=(205, 205, 205))
     return canvas
 
 
 def _template_three(bg, side, data, logo):
-    canvas = _cover(bg, POSTER_SIZE)
-    canvas = _overlay_gradient(canvas, 90, 90)
+    canvas = Image.new("RGB", POSTER_SIZE, (247, 248, 252))
     draw = ImageDraw.Draw(canvas)
-    _draw_brand(draw, data.get("brand"))
+    accent = (247, 105, 110)
+    draw.ellipse((640, 88, 1200, 650), fill=accent)
+    draw.ellipse((1110, -70, 1255, 75), fill=accent)
     _paste_logo(canvas, logo)
-    _draw_wrapped(draw, (78, 395), data.get("title"), _font(64, True), "white", 650, 8, 3)
-    draw.rounded_rectangle((58, 610, 1220, 690), radius=8, fill=(12, 16, 22))
-    info = f"{data.get('year') or ''}   {data.get('genres') or ''}   {data.get('rating') or ''}"
-    draw.text((88, 638), info.strip(), font=_font(26, True), fill=(235, 235, 235))
-    _paste_rounded(canvas, side, (1000, 210, 170, 255), 6, 4)
+    brand = _safe_text(data.get("brand"), "Anime Starfall").upper().split()
+    draw.text((70, 52), brand[0] if brand else "ANIME", font=_font(20, True), fill=(24, 28, 34))
+    draw.text((142, 52), " ".join(brand[1:]) or "STARFALL", font=_font(20, True), fill=accent)
+    _top_nav(draw, ["Main", "Ongoing", "Finished"], x=350, y=55, fill=(155, 158, 164), accent=accent)
+    meta = " - ".join(x for x in (data.get("category", "").upper(), data.get("year"), f"{data.get('episodes')} EPISODES" if data.get("episodes") else "") if x)
+    draw.text((70, 165), meta, font=_font(20), fill=(160, 160, 160))
+    _draw_wrapped(draw, (70, 210), _safe_text(data.get("title")).upper(), _font(36, True), (24, 28, 34), 520, 9, 3)
+    draw.line((70, 320, 70, 393), fill=accent, width=2)
+    _draw_wrapped(draw, (94, 322), _short_plot(data), _font(18), (145, 145, 145), 460, 6, 4)
+    draw.rounded_rectangle((70, 470, 310, 520), radius=24, outline=accent, width=2)
+    draw.rectangle((70, 470, 120, 520), fill=accent)
+    draw.text((150, 490), "DOWNLOAD NOW", font=_font(18, True), fill=(85, 85, 85))
+    draw.text((70, 635), "STUDIO", font=_font(15, True), fill=accent)
+    draw.text((210, 635), "FIRST AIRED", font=_font(15, True), fill=accent)
+    draw.text((350, 635), "RATING", font=_font(15, True), fill=accent)
+    draw.text((70, 662), _safe_text(data.get("studio"), "N/A")[:18], font=_font(15), fill=(35, 35, 35))
+    draw.text((210, 662), _safe_text(data.get("first_aired") or data.get("year"), "N/A")[:18], font=_font(15), fill=(35, 35, 35))
+    draw.text((350, 662), _safe_text(data.get("rating"), "N/A")[:18], font=_font(15), fill=(35, 35, 35))
+    _paste_rounded(canvas, side, (705, 78, 415, 610), 4, None)
     return canvas
 
 
 def _template_four(bg, side, data, logo):
-    canvas = _cover(bg, POSTER_SIZE).filter(ImageFilter.GaussianBlur(13))
-    canvas = _overlay_gradient(canvas, 175, 120)
+    canvas = Image.new("RGB", POSTER_SIZE, (237, 248, 255))
     draw = ImageDraw.Draw(canvas)
-    _draw_brand(draw, data.get("brand"))
+    blue = (83, 188, 232)
+    draw.ellipse((-145, 0, 520, 700), fill=(226, 243, 252))
+    draw.ellipse((632, -130, 1270, 800), fill=(186, 227, 247))
+    draw.ellipse((-75, 350, 120, 550), outline=blue, width=8)
+    _top_nav(draw, ["Episode", "Trailer", "Home"], x=150, y=68, fill=(31, 41, 55), accent=blue)
     _paste_logo(canvas, logo)
-    draw.rounded_rectangle((88, 130, 1188, 628), radius=22, fill=(25, 28, 35))
-    _paste_rounded(canvas, side, (130, 170, 260, 390), 12, None)
-    _draw_wrapped(draw, (430, 170), data.get("title"), _font(58, True), "white", 685, 8, 3)
-    meta = f"{data.get('year')}  {data.get('genres')}  {data.get('rating')}".strip()
-    _draw_wrapped(draw, (430, 360), meta, _font(26, True), (218, 177, 91), 640, 6, 2)
-    _draw_wrapped(draw, (430, 420), data.get("plot") or data.get("synopsis"), _font(25), (230, 230, 230), 650, 7, 5)
+    draw.text((150, 195), _safe_text(data.get("brand"), "Anime Starfall").upper(), font=_font(20, True), fill=(31, 41, 55))
+    if data.get("rating"):
+        draw.text((320, 195), _rating_number(data.get("rating")) + "/10", font=_font(20, True), fill=(31, 41, 55))
+    _draw_wrapped(draw, (150, 245), _safe_text(data.get("title")).upper(), _font(42, True), (24, 34, 48), 520, 8, 3)
+    _draw_wrapped(draw, (150, 345), _short_plot(data), _font(23), (60, 70, 82), 450, 8, 4)
+    draw.rounded_rectangle((150, 470, 350, 530), radius=6, fill=blue)
+    draw.text((190, 493), "Watch Now", font=_font(22, True), fill="white")
+    _paste_rounded(canvas, side, (760, 70, 330, 610), 8, None)
     return canvas
 
 
 def _template_five(bg, side, data, logo):
-    canvas = _cover(bg, POSTER_SIZE)
+    canvas = Image.new("RGB", POSTER_SIZE, (8, 8, 8))
+    poster = _cover(bg, (580, 720))
+    canvas.paste(poster, (700, 0))
     draw = ImageDraw.Draw(canvas)
-    draw.rectangle((0, 0, 1280, 720), fill=(0, 0, 0, 82))
+    _paste_logo(canvas, logo)
+    _top_nav(draw, _genre_list(data) or ["Comedy", "Romance", "Slice Of Life"], x=345, y=22, fill="white", accent=(160, 77, 255))
+    _draw_wrapped(draw, (60, 205), _safe_text(data.get("title")).upper(), _font(50, True), "white", 570, 14, 3)
+    draw.rounded_rectangle((50, 335, 650, 475), radius=10, fill=(35, 35, 35))
+    _draw_wrapped(draw, (70, 355), _short_plot(data), _font(20, True), "white", 545, 5, 5)
+    draw.rounded_rectangle((60, 505, 280, 565), radius=28, fill=(95, 150, 255))
+    draw.rounded_rectangle((170, 505, 280, 565), radius=28, fill=(164, 77, 255))
+    draw.text((100, 527), "WATCH NOW!!", font=_font(22, True), fill="white")
+    draw.ellipse((60, 640, 108, 688), outline="white", width=3)
+    draw.text((125, 658), _safe_text(data.get("brand"), "Anime Starfall"), font=_font(17, True), fill="white")
+    return canvas
+
+
+def _template_six(bg, side, data, logo):
+    canvas = Image.new("RGB", POSTER_SIZE, (248, 248, 247))
+    left = _cover(bg, (550, 720))
+    canvas.paste(left, (0, 0))
+    shade = Image.new("RGBA", (550, 720), (0, 0, 0, 70))
+    canvas.paste(Image.alpha_composite(left.convert("RGBA"), shade).convert("RGB"), (0, 0))
+    draw = ImageDraw.Draw(canvas)
     _draw_brand(draw, data.get("brand"))
     _paste_logo(canvas, logo)
-    draw.rounded_rectangle((58, 420, 750, 650), radius=10, fill=(8, 10, 14))
-    _draw_wrapped(draw, (92, 455), data.get("title"), _font(58, True), "white", 600, 8, 2)
-    info = " / ".join(x for x in (data.get("year"), data.get("genres"), data.get("rating")) if x)
-    _draw_wrapped(draw, (94, 575), info, _font(25, True), (232, 201, 122), 580, 4, 2)
-    _paste_rounded(canvas, side, (950, 100, 220, 330), 10, 4)
+    x = 600
+    _draw_wrapped(draw, (x, 215), _safe_text(data.get("title")).upper(), _font(46, True), (0, 0, 0), 590, 8, 3)
+    chips = _genre_list(data, 2)
+    cx = x
+    for chip in chips:
+        width = min(135, 20 + len(chip) * 10)
+        draw.rounded_rectangle((cx, 324, cx + width, 354), radius=15, outline=(120, 120, 120), width=1)
+        draw.text((cx + 15, 332), chip.title(), font=_font(14, True), fill=(80, 80, 80))
+        cx += width + 12
+    if rating := _rating_number(data.get("rating")):
+        draw.text((cx + 6, 326), f"Avg Rating: {rating}", font=_font(20, True), fill=(0, 0, 0))
+    draw.line((x, 376, 1230, 376), fill=(210, 210, 210), width=2)
+    _draw_wrapped(draw, (x, 405), _short_plot(data).upper(), _font(19), (120, 120, 120), 590, 8, 6)
+    draw.line((x, 560, 1230, 560), fill=(210, 210, 210), width=2)
+    draw.rounded_rectangle((x, 585, x + 150, 630), radius=22, fill=(0, 0, 0))
+    draw.text((x + 24, 600), "WATCH NOW!!", font=_font(16, True), fill="white")
+    draw.ellipse((x + 165, 585, x + 210, 630), fill=(0, 0, 0))
     return canvas
 
 
@@ -467,6 +677,7 @@ def _render_template(style, bg, side, data, logo=None):
         "3": _template_three,
         "4": _template_four,
         "5": _template_five,
+        "6": _template_six,
     }
     return renderers.get(style, _template_one)(bg, side, data, logo)
 
@@ -525,7 +736,7 @@ async def generate_task_poster(
         return None
     metadata = await _metadata(filename, filepath, user_dict, file_caption, link)
     template = str(_cfg(user_dict, "POST_TEMPLATE_ID", 1) or 1)
-    if template not in {"1", "2", "3", "4", "5"}:
+    if template not in {str(i) for i in range(1, POSTER_TEMPLATE_COUNT + 1)}:
         template = "1"
     await makedirs(ospath.join(DOWNLOAD_DIR, "generated_posters"), exist_ok=True)
     bg, side = await _images_for(metadata, filename, filepath, as_doc)

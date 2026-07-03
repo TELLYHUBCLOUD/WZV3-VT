@@ -20,9 +20,9 @@ def _state_style(selected):
 
 
 def _btn_style(style=None):
-    if Config.COLORED_BTNS and style:
-        return style
-    return ButtonStyle.DEFAULT
+    if not Config.COLORED_BTNS:
+        return ButtonStyle.DEFAULT
+    return style or ButtonStyle.PRIMARY
 
 
 def _danger_label(label):

@@ -5,9 +5,9 @@ from ...core.config_manager import Config
 
 
 def _btn_style(style=None):
-    if Config.COLORED_BTNS and style:
-        return style
-    return ButtonStyle.DEFAULT
+    if not Config.COLORED_BTNS:
+        return ButtonStyle.DEFAULT
+    return style or ButtonStyle.PRIMARY
 
 
 class ButtonMaker:

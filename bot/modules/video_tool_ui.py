@@ -1,6 +1,8 @@
+from pyrogram.enums import ButtonStyle
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .. import LOGGER
+from ..core.config_manager import Config
 from ..helper.video_utils.video_tools import (
     UI_TIMEOUT,
     get_vt_event,
@@ -10,11 +12,21 @@ from ..helper.video_utils.video_tools import (
 
 
 def _selected_icon(selected):
-    return "🟢 " if selected else ""
-
-
-def _selected_icon(selected):
     return "\U0001F7E2 " if selected else ""
+
+
+def _state_style(selected):
+    return _btn_style(ButtonStyle.SUCCESS) if selected else _btn_style()
+
+
+def _btn_style(style=None):
+    if Config.COLORED_BTNS and style:
+        return style
+    return ButtonStyle.DEFAULT
+
+
+def _danger_label(label):
+    return f"\U0001F534 {label}"
 
 
 def _has_extract_selection(state):
@@ -74,20 +86,16 @@ async def render_video_tools_main(vt_msg, state):
     if extract_selected:
         text += "\n\n<b>Extract mode:</b> enabled. Other Video Tools actions are disabled."
         rows = [
-            [InlineKeyboardButton("🟢 Extract Stream", callback_data=f"vt_extract_{task_id}")],
+            [InlineKeyboardButton(_selected_icon(True) + "Extract Stream", callback_data=f"vt_extract_{task_id}", style=_btn_style(ButtonStyle.SUCCESS))],
             [
-                InlineKeyboardButton("Done", callback_data=f"vt_done_{task_id}"),
-                InlineKeyboardButton("Close", callback_data=f"vt_close_{task_id}"),
+                InlineKeyboardButton("\U0001F7E2 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
+                InlineKeyboardButton(_danger_label("Close"), callback_data=f"vt_close_{task_id}", style=_btn_style(ButtonStyle.DANGER)),
             ],
         ]
-        rows[0][0] = InlineKeyboardButton(
-            _selected_icon(True) + "Extract Stream",
-            callback_data=f"vt_extract_{task_id}",
-        )
     else:
         rows = [
             [
-                InlineKeyboardButton("Remove Stream", callback_data=f"vt_remove_{task_id}"),
+                InlineKeyboardButton(_danger_label("Remove Stream"), callback_data=f"vt_remove_{task_id}", style=_btn_style(ButtonStyle.DANGER)),
                 InlineKeyboardButton("Extract Stream", callback_data=f"vt_extract_{task_id}"),
             ],
             [InlineKeyboardButton("Change Order", callback_data=f"vt_order_{task_id}")],
@@ -95,10 +103,10 @@ async def render_video_tools_main(vt_msg, state):
                 InlineKeyboardButton("Merge Tracks", callback_data=f"vt_merge_{task_id}"),
                 InlineKeyboardButton("Translate Subs", callback_data=f"vt_translate_{task_id}"),
             ],
-            [InlineKeyboardButton("Video + Video", callback_data=f"vt_video_{task_id}")],
+            [InlineKeyboardButton(_selected_icon(state.get("video_merge")) + "Video + Video", callback_data=f"vt_video_{task_id}", style=_state_style(state.get("video_merge")))],
             [
-                InlineKeyboardButton("Done", callback_data=f"vt_done_{task_id}"),
-                InlineKeyboardButton("Close", callback_data=f"vt_close_{task_id}"),
+                InlineKeyboardButton("\U0001F7E2 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
+                InlineKeyboardButton(_danger_label("Close"), callback_data=f"vt_close_{task_id}", style=_btn_style(ButtonStyle.DANGER)),
             ],
         ]
     markup = InlineKeyboardMarkup(rows)
@@ -160,18 +168,23 @@ async def render_stream_list(query, state, action_key, title):
     is_order = action_key in ("audio_order", "sub_order")
     for track in tracks:
         idx = track["index"]
+        selected_row = False
         if action_key in ("default_audio", "default_sub"):
-            icon = _selected_icon(selected == idx)
+            selected_row = selected == idx
+            icon = _selected_icon(selected_row)
         elif is_order:
             order = state.get(action_key, [])
-            icon = f"{order.index(idx) + 1}. 🟢 " if idx in order else ""
+            selected_row = idx in order
+            icon = f"{order.index(idx) + 1}. {_selected_icon(True)}" if selected_row else ""
         else:
-            icon = _selected_icon(idx in state.get(action_key, []))
+            selected_row = idx in state.get(action_key, [])
+            icon = _selected_icon(selected_row)
         markup.append(
             [
                 InlineKeyboardButton(
                     icon + _track_text(track),
                     callback_data=f"vt_toggle_{action_key}_{idx}_{task_id}",
+                    style=_state_style(selected_row),
                 )
             ]
         )
@@ -182,8 +195,9 @@ async def render_stream_list(query, state, action_key, title):
         markup.append(
             [
                 InlineKeyboardButton(
-                    "Clear Multi" if all_selected else "Multi Select",
+                    "\U0001F7E2 Clear Multi" if all_selected else "Multi Select",
                     callback_data=f"vt_toggle_{action_key}_all_{task_id}",
+                    style=_btn_style(ButtonStyle.SUCCESS) if all_selected else _btn_style(),
                 )
             ]
         )
@@ -197,8 +211,8 @@ async def render_stream_list(query, state, action_key, title):
         )
         markup.append(
             [
-                InlineKeyboardButton("Remove", callback_data=f"vt_removego_{task_id}"),
-                InlineKeyboardButton("Continue", callback_data=f"vt_main_{task_id}"),
+                InlineKeyboardButton(_danger_label("Remove"), callback_data=f"vt_removego_{task_id}", style=_btn_style(ButtonStyle.DANGER)),
+                InlineKeyboardButton("\U0001F7E2 Continue", callback_data=f"vt_main_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
             ]
         )
     else:

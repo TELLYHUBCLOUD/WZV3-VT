@@ -12,10 +12,29 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from aiofiles.os import makedirs, remove
 from aiofiles.os import path as aiopath
 from langcodes import Language
+from pyrogram.enums import ButtonStyle
 from pyrogram.filters import create
 from pyrogram.handlers import MessageHandler
 
 from bot.helper.ext_utils.status_utils import get_readable_file_size
+
+GREEN_DOT = "\U0001F7E2"
+RED_DOT = "\U0001F534"
+CHECK_MARK = "\u2705"
+CROSS_MARK = "\u274C"
+
+
+def state_icon(enabled):
+    return GREEN_DOT if enabled else RED_DOT
+
+
+def state_style(enabled):
+    return ButtonStyle.SUCCESS if enabled else ButtonStyle.DANGER
+
+
+def state_label(label, enabled):
+    return f"{state_icon(enabled)} {label}"
+
 
 from .. import auth_chats, excluded_extensions, sudo_users, user_data
 from ..core.config_manager import Config
@@ -472,9 +491,17 @@ async def get_user_settings(from_user, stype="main"):
             ]
         ):
             buttons.data_button(
-                "Reset All", f"userset {user_id} confirm_reset_all", position="footer"
+                f"{RED_DOT} Reset All",
+                f"userset {user_id} confirm_reset_all",
+                position="footer",
+                style=ButtonStyle.DANGER,
             )
-        buttons.data_button("Close", f"userset {user_id} close", position="footer")
+        buttons.data_button(
+            f"{RED_DOT} Close",
+            f"userset {user_id} close",
+            position="footer",
+            style=ButtonStyle.DANGER,
+        )
 
         text = f"""⌬ <b>User Settings :</b>
 │
@@ -666,40 +693,47 @@ Unlock to view, add, test, remove, or export helper token data."""
         buttons.data_button("Leech Caption", f"userset {user_id} menu LEECH_CAPTION")
         buttons.data_button("Thumbnail Layout", f"userset {user_id} menu THUMBNAIL_LAYOUT")
         buttons.data_button(
-            f"{tick('AS_DOCUMENT')}Send As Document",
+            state_label("Send As Document", enabled("AS_DOCUMENT")),
             f"userset {user_id} tog AS_DOCUMENT {'f' if enabled('AS_DOCUMENT') else 't'}",
+            style=state_style(enabled("AS_DOCUMENT")),
         )
         if TgClient.IS_PREMIUM_USER:
             buttons.data_button(
-                "✅ Leech by User" if user_upload else "Leech by Bot",
+                state_label("Leech by User" if user_upload else "Leech by Bot", user_upload),
                 f"userset {user_id} tog USER_TRANSMISSION {'f' if user_upload else 't'}",
+                style=state_style(user_upload),
             )
             buttons.data_button(
-                f"{tick('HYBRID_LEECH')}Hybrid Leech",
+                state_label("Hybrid Leech", hybrid_upload),
                 f"userset {user_id} tog HYBRID_LEECH {'f' if hybrid_upload else 't'}",
+                style=state_style(hybrid_upload),
             )
         buttons.data_button(
-            f"{tick('AUTO_THUMBNAIL')}Auto Thumbnail",
+            state_label("Auto Thumbnail", enabled("AUTO_THUMBNAIL")),
             f"userset {user_id} tog AUTO_THUMBNAIL {'f' if enabled('AUTO_THUMBNAIL') else 't'}",
+            style=state_style(enabled("AUTO_THUMBNAIL")),
         )
         buttons.data_button(
-            f"{tick('AUTORENAME')}AutoRename",
+            state_label("AutoRename", enabled("AUTORENAME")),
             f"userset {user_id} tog AUTORENAME {'f' if enabled('AUTORENAME') else 't'}",
+            style=state_style(enabled("AUTORENAME")),
         )
         buttons.data_button("AutoRename Template", f"userset {user_id} menu lremname_auto")
         buttons.data_button(
-            f"{tick('LEECH_COMPLETE_MSG')}Complete Msg",
+            state_label("Complete Msg", enabled("LEECH_COMPLETE_MSG")),
             f"userset {user_id} tog LEECH_COMPLETE_MSG {'f' if enabled('LEECH_COMPLETE_MSG') else 't'}",
+            style=state_style(enabled("LEECH_COMPLETE_MSG")),
         )
         buttons.data_button(
-            f"{tick('SEQUENTIAL_LEECH')}Sequential Leech",
+            state_label("Sequential Leech", enabled("SEQUENTIAL_LEECH")),
             f"userset {user_id} tog SEQUENTIAL_LEECH {'f' if enabled('SEQUENTIAL_LEECH') else 't'}",
+            style=state_style(enabled("SEQUENTIAL_LEECH")),
         )
         buttons.data_button(f"Caption Font ({font_label})", f"userset {user_id} font")
         buttons.data_button("Subtitle Target", f"userset {user_id} menu SUBTITLE_TRANSLATE_TARGET")
         buttons.data_button("Intro Subtitle", f"userset {user_id} menu INTRO_SUBTITLE_TEXT")
         buttons.data_button("Back", f"userset {user_id} back", "footer")
-        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        buttons.data_button(f"{RED_DOT} Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
         btns = buttons.build_menu(2)
 
         text = f"""<b>Leech Settings</b>
@@ -953,7 +987,7 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
             return config_bool(value, default)
 
         def tick(key, default=False):
-            return "* " if enabled(key, default) else ""
+            return f"{CHECK_MARK} " if enabled(key, default) else f"{CROSS_MARK} "
 
         template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
         if template_id not in {"1", "2", "3", "4", "5", "6"}:
@@ -963,12 +997,14 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
         logo_msg = "Exists" if logo and (str(logo).startswith(("http://", "https://")) or await aiopath.exists(str(logo))) else "Not Exists"
 
         buttons.data_button(
-            f"{tick('AUTO_POSTER_ENABLED')}Auto Poster",
+            state_label("Auto Poster", enabled("AUTO_POSTER_ENABLED")),
             f"userset {user_id} tog AUTO_POSTER_ENABLED {'f' if enabled('AUTO_POSTER_ENABLED') else 't'}",
+            style=state_style(enabled("AUTO_POSTER_ENABLED")),
         )
         buttons.data_button(
-            f"{tick('AUTO_POSTER_USE_AS_THUMBNAIL', True)}Use As Thumbnail",
+            state_label("Use As Thumbnail", enabled("AUTO_POSTER_USE_AS_THUMBNAIL", True)),
             f"userset {user_id} tog AUTO_POSTER_USE_AS_THUMBNAIL {'f' if enabled('AUTO_POSTER_USE_AS_THUMBNAIL', True) else 't'}",
+            style=state_style(enabled("AUTO_POSTER_USE_AS_THUMBNAIL", True)),
         )
         buttons.data_button("Template", f"userset {user_id} posttemplate")
         buttons.data_button("Movie Caption", f"userset {user_id} menu POST_MOVIE_CAPTION")
@@ -977,7 +1013,7 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
         buttons.data_button("Brand Name", f"userset {user_id} menu POST_BRAND_NAME")
         buttons.data_button("Logo", f"userset {user_id} menu POST_LOGO")
         buttons.data_button("Back", f"userset {user_id} back", "footer")
-        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        buttons.data_button(f"{RED_DOT} Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
         btns = buttons.build_menu(2)
 
         text = f"""<b>Post Settings</b>
@@ -995,13 +1031,14 @@ Use /poster or /p to manually search and save a thumbnail style.
     elif stype == "posttemplate":
         template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
         for i in range(1, 7):
-            prefix = "* " if template_id == str(i) else ""
+            prefix = f"{GREEN_DOT} " if template_id == str(i) else ""
             buttons.data_button(
                 f"{prefix}Template {i}",
                 f"userset {user_id} posttemplateset {i}",
+                style=ButtonStyle.SUCCESS if template_id == str(i) else None,
             )
         buttons.data_button("Back", f"userset {user_id} post", "footer")
-        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        buttons.data_button(f"{RED_DOT} Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
         btns = buttons.build_menu(2)
         text = f"""<b>Poster Template</b>
 
@@ -1037,30 +1074,36 @@ Current: <b>{escape(template_id)}</b>"""
         for key, label in toggles:
             state = enabled(key)
             buttons.data_button(
-                f"{'🟢' if state else '⚪'} {label}",
+                state_label(label, state),
                 f"userset {user_id} tog {key} {'f' if state else 't'}",
+                style=state_style(state),
             )
-            status_lines.append(f"• {label}: <b>{'On' if state else 'Off'}</b>")
+            status_lines.append(f"- {label}: <b>{'On' if state else 'Off'}</b>")
 
         buttons.data_button(
-            f"{'🟢' if value_set('AUTO_KEEP_AUDIO_LANGS') else '⚪'} Keep Audios",
+            state_label("Keep Audios", value_set("AUTO_KEEP_AUDIO_LANGS")),
             f"userset {user_id} menu AUTO_KEEP_AUDIO_LANGS",
+            style=state_style(value_set("AUTO_KEEP_AUDIO_LANGS")),
         )
         buttons.data_button(
-            f"{'🟢' if value_set('AUTO_KEEP_SUBTITLE_LANGS') else '⚪'} Keep Subtitles",
+            state_label("Keep Subtitles", value_set("AUTO_KEEP_SUBTITLE_LANGS")),
             f"userset {user_id} menu AUTO_KEEP_SUBTITLE_LANGS",
+            style=state_style(value_set("AUTO_KEEP_SUBTITLE_LANGS")),
         )
         buttons.data_button(
-            f"{'🟢' if value_set('AUTO_AUDIO_ORDER') else '⚪'} Audios Order",
+            state_label("Audios Order", value_set("AUTO_AUDIO_ORDER")),
             f"userset {user_id} menu AUTO_AUDIO_ORDER",
+            style=state_style(value_set("AUTO_AUDIO_ORDER")),
         )
         buttons.data_button(
-            f"{'🟢' if value_set('AUTO_SUBTITLE_ORDER') else '⚪'} Subtitles Order",
+            state_label("Subtitles Order", value_set("AUTO_SUBTITLE_ORDER")),
             f"userset {user_id} menu AUTO_SUBTITLE_ORDER",
+            style=state_style(value_set("AUTO_SUBTITLE_ORDER")),
         )
         buttons.data_button(
-            f"{'🟢' if value_set('INTRO_SUBTITLE_RANGES') else '⚪'} Intro Ranges",
+            state_label("Intro Ranges", value_set("INTRO_SUBTITLE_RANGES")),
             f"userset {user_id} menu INTRO_SUBTITLE_RANGES",
+            style=state_style(value_set("INTRO_SUBTITLE_RANGES")),
         )
 
         keep_audio = user_dict.get("AUTO_KEEP_AUDIO_LANGS") or Config.AUTO_KEEP_AUDIO_LANGS or "Not Set"
@@ -1070,7 +1113,7 @@ Current: <b>{escape(template_id)}</b>"""
         intro_ranges = user_dict.get("INTRO_SUBTITLE_RANGES") or Config.INTRO_SUBTITLE_RANGES or "Not Set"
 
         buttons.data_button("Back", f"userset {user_id} back", "footer")
-        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        buttons.data_button(f"{RED_DOT} Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
         btns = buttons.build_menu(2)
 
         text = f"""<b>Auto Process</b>
@@ -2394,9 +2437,9 @@ async def edit_user_settings(client, query):
     elif data[2] == "confirm_reset_all":
         await query.answer()
         buttons = ButtonMaker()
-        buttons.data_button("Yes", f"userset {user_id} do_reset_all yes")
-        buttons.data_button("No", f"userset {user_id} do_reset_all no")
-        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        buttons.data_button(f"{GREEN_DOT} Yes", f"userset {user_id} do_reset_all yes", style=ButtonStyle.SUCCESS)
+        buttons.data_button(f"{RED_DOT} No", f"userset {user_id} do_reset_all no", style=ButtonStyle.DANGER)
+        buttons.data_button(f"{RED_DOT} Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER)
         text = "<i>Are you sure you want to reset all your user settings?</i>"
         await edit_message(query.message, text, buttons.build_menu(2))
     elif data[2] == "do_reset_all":

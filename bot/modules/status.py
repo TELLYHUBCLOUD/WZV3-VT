@@ -3,6 +3,7 @@ from contextlib import suppress
 from time import time
 from asyncio import gather, iscoroutinefunction
 
+from pyrogram.enums import ButtonStyle
 from pyrogram.errors import QueryIdInvalid
 
 from .. import (
@@ -232,7 +233,7 @@ async def status_pages(_, query):
 ┖ <b>Total Seeding Speed:</b> {get_readable_file_size(seed_speed)}/s
 """
         button = ButtonMaker()
-        button.data_button("Back", f"status {data[1]} ref")
+        button.data_button("\U0001F519 Back", f"status {data[1]} ref", style=ButtonStyle.PRIMARY)
         await edit_message(message, msg, button.build_menu())
 
     try:

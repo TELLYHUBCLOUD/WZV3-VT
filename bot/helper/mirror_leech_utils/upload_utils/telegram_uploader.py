@@ -233,6 +233,7 @@ class TelegramUploader:
                             first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
                             custom_name=getattr(self._listener, "custom_name", ""),
                             link=getattr(self._listener, "source_url", ""),
+                            prefer_filename=True,
                         )
                         cap_file_ = file_
                 elif rename_method == "regex":
@@ -726,6 +727,7 @@ class TelegramUploader:
                             file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
                             custom_name=custom_name,
                             link=getattr(self._listener, "source_url", ""),
+                            prefer_filename=True,
                         )
                         force_anime_thumb = getattr(self._listener, "force_anime_thumbnail", False)
                         rename_regex = (

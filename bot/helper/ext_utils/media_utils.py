@@ -2399,13 +2399,24 @@ def _usable_media_seed(value):
 
 
 def choose_media_title_seed(filename, **extra):
-    candidates = [
-        extra.get("first_file") or extra.get("extracted_name"),
-        _first_caption_line(extra.get("file_caption") or extra.get("precaption")),
-        extra.get("custom_name"),
-        filename,
-        extra.get("link"),
-    ]
+    caption = _first_caption_line(extra.get("file_caption") or extra.get("precaption"))
+    extracted = extra.get("first_file") or extra.get("extracted_name")
+    if extra.get("prefer_filename"):
+        candidates = [
+            filename,
+            extracted,
+            caption,
+            extra.get("custom_name"),
+            extra.get("link"),
+        ]
+    else:
+        candidates = [
+            extracted,
+            caption,
+            extra.get("custom_name"),
+            filename,
+            extra.get("link"),
+        ]
     for candidate in candidates:
         seed = _usable_media_seed(candidate)
         if seed:

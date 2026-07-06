@@ -70,8 +70,25 @@ def _lang_matches(track_lang, keep):
         "hi": {"hi", "hin", "hindi"},
         "hin": {"hi", "hin", "hindi"},
         "hindi": {"hi", "hin", "hindi"},
+        "zh": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "zho": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "chi": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "chs": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "cht": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "cn": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "chinese": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "mandarin": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "cantonese": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
+        "ko": {"kor", "ko", "kr", "korean"},
+        "kor": {"kor", "ko", "kr", "korean"},
+        "kr": {"kor", "ko", "kr", "korean"},
+        "korean": {"kor", "ko", "kr", "korean"},
     }
-    return bool((aliases.get(lang, {lang}) | {lang}) & keep)
+    expanded_keep = set()
+    for item in keep:
+        expanded_keep |= aliases.get(item, {item})
+        expanded_keep.add(item)
+    return bool((aliases.get(lang, {lang}) | {lang}) & expanded_keep)
 
 
 async def _set_process_message(listener, text):

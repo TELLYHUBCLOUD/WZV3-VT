@@ -431,6 +431,7 @@ Title3 link -c cmd -d ratio:time -z password
 -inf For included words filter.
 -exf For excluded words filter.
 -stv true or false (sensitive filter)
+-al true or false (owner/sudo RSS auto-leech into RSS_CHAT, one task at a time)
 
 Example: Title https://www.rss-url.com -inf 1080 or 720 or 144p|mkv or mp4|hevc -exf flv or web|xxx
 This filter will parse links that its titles contain `(1080 or 720 or 144p) and (mkv or mp4) and hevc` and doesn't contain (flv or web) and xxx words. You can add whatever you want.
@@ -481,6 +482,7 @@ def get_bot_commands():
         "Rss": "User RSS Management Settings",
         "IMDB": "[query] or ttxxxxxx Get IMDB info",
         "Poster": "[query/reply] Search and save edited poster thumbnail",
+        "Sites": "Show owner-configured useful website links",
         "CancelAll": "Cancel all Tasks on the Bot",
         "Help": "Detailed help usage of the WZ Bot",
         "BotSet": "[SUDO] Bot Management Settings",

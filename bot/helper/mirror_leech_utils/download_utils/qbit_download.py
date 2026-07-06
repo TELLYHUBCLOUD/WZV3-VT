@@ -91,6 +91,11 @@ async def add_qb_torrent(listener, path, ratio, seed_time):
         tor_info = tor_info[0]
         listener.name = tor_info.name
         ext_hash = tor_info.hash
+        if getattr(listener, "rss_auto_leech", False):
+            try:
+                await TorrentManager.qbittorrent.torrents.set_upload_limit([ext_hash], 0)
+            except Exception as err:
+                LOGGER.warning(f"Failed to set RSS qB upload limit to 0: {err}")
 
         async with task_dict_lock:
             task_dict[listener.mid] = QbittorrentStatus(listener, queued=add_to_queue)

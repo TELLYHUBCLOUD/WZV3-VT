@@ -990,7 +990,7 @@ Intro Subtitle: <code>{escape(intro_subtitle)}</code>
             return f"{CHECK_MARK} " if enabled(key, default) else f"{CROSS_MARK} "
 
         template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
-        if template_id not in {"1", "2", "3", "4", "5", "6"}:
+        if template_id not in {str(i) for i in range(1, 9)}:
             template_id = "1"
         brand = user_dict.get("POST_BRAND_NAME") or Config.POST_BRAND_NAME or "Anime Starfall"
         logo = user_dict.get("POST_LOGO") or Config.POST_LOGO or ""
@@ -1021,7 +1021,7 @@ Name: {user_name}
 
 Auto Poster: <b>{'Enabled' if enabled('AUTO_POSTER_ENABLED') else 'Disabled'}</b>
 Use Poster As Thumbnail: <b>{'Enabled' if enabled('AUTO_POSTER_USE_AS_THUMBNAIL', True) else 'Disabled'}</b>
-Template: <b>{template_id}/6</b>
+Template: <b>{template_id}/8</b>
 Brand: <code>{escape(str(brand))}</code>
 Logo: <b>{logo_msg}</b>
 
@@ -1030,7 +1030,7 @@ Use /poster or /p to manually search and save a thumbnail style.
 
     elif stype == "posttemplate":
         template_id = str(user_dict.get("POST_TEMPLATE_ID") or Config.POST_TEMPLATE_ID or 1)
-        for i in range(1, 7):
+        for i in range(1, 9):
             prefix = f"{GREEN_DOT} " if template_id == str(i) else ""
             buttons.data_button(
                 f"{prefix}Template {i}",
@@ -2192,7 +2192,7 @@ async def edit_user_settings(client, query):
         await update_user_settings(query, data[2])
     elif data[2] == "posttemplateset":
         await query.answer("Template saved.", show_alert=True)
-        template_id = data[3] if len(data) > 3 and data[3] in {"1", "2", "3", "4", "5", "6"} else "1"
+        template_id = data[3] if len(data) > 3 and data[3] in {str(i) for i in range(1, 9)} else "1"
         update_user_ldata(user_id, "POST_TEMPLATE_ID", int(template_id))
         await database.update_user_data(user_id)
         await update_user_settings(query, "posttemplate")

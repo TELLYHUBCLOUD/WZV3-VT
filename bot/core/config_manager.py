@@ -58,12 +58,16 @@ class Config:
     POST_TEMPLATE_ID = 1
     POST_BRAND_NAME = "Anime Starfall"
     POST_LOGO = ""
+    SITES_LINKS = ""
     POST_MOVIE_CAPTION = (
-        "<b>{title}</b> ({year})\n\n"
-        "Quality: <code>{quality} {resolution} {bit} {codec}</code>\n"
-        "Audio: <code>{audio}</code>\n"
-        "Subtitles: <code>{subtitles}</code>\n\n"
-        "<blockquote expandable>{plot}</blockquote>"
+        "<b>「 {title} 」</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "<code>╔════◇═══════════◇════\n"
+        "║ IMDb ➤ {rating}\n"
+        "║ Quality ➤ {resolution} {bit} {ott} {source} {codec}\n"
+        "║ Audio ➤ {language} - {audio_codec} {audio_channels}\n"
+        "╚════◇═══════════◇════</code>\n\n"
+        "≡ <blockquote expandable>{plot}</blockquote>"
     )
     POST_ANIME_CAPTION = (
         "<b>{title}</b>\n\n"

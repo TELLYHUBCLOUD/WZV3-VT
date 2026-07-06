@@ -2025,7 +2025,7 @@ async def extract_metadata_from_filename(filename, filepath=None):
     clean_filename = re.sub(pattern, "", filename, flags=re.IGNORECASE).strip()
 
     merge_range = re.search(
-        r"^\[S0*(\d{1,2})-EP\((\d{1,4})-(\d{1,4})\)\]",
+        r"^\[S0*(\d{1,2})-EP\(\s*(\d{1,4})\s*-\s*(\d{1,4})\s*\)\]",
         clean_filename,
         re.IGNORECASE,
     )
@@ -2033,7 +2033,7 @@ async def extract_metadata_from_filename(filename, filepath=None):
         metadata["season"] = merge_range.group(1)
         metadata["start"] = merge_range.group(2).zfill(2)
         metadata["end"] = merge_range.group(3).zfill(2)
-        metadata["range"] = f"EP({metadata['start']} - {metadata['end']})"
+        metadata["range"] = f"EP({metadata['start']}-{metadata['end']})"
         metadata["episode"] = metadata["range"]
 
     title_patterns = [

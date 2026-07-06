@@ -333,6 +333,13 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            sites,
+            filters=command(BotCommands.SitesCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             ping,
             filters=command(BotCommands.PingCommand, case_sensitive=True)
             & CustomFilters.authorized,

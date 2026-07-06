@@ -27,16 +27,19 @@ SITE_QUALITY_SELECTOR_TIMEOUT = 120
 MX_DEFAULT_AUDIO = "ask"  # ask, all, skip/none, or comma languages like hin,tam,eng
 AUTO_POSTER_ENABLED = False
 AUTO_POSTER_USE_AS_THUMBNAIL = True
-POST_TEMPLATE_ID = 1  # 1..6
+POST_TEMPLATE_ID = 1  # 1..8
 POST_BRAND_NAME = "Anime Starfall"
 POST_LOGO = ""  # local path or URL
-POST_MOVIE_CAPTION = """<b>{title}</b> ({year})
+SITES_LINKS = ""  # Useful links for /sites. Use JSON {"Name":"https://..."} or lines "Name | https://..."
+POST_MOVIE_CAPTION = """<b>? {title} ?</b>
+??????????????????
+<code>+----?-----------?----
+¦ IMDb ? {rating}
+¦ Quality ? {resolution} {bit} {ott} {source} {codec}
+¦ Audio ? {language} - {audio_codec} {audio_channels}
++----?-----------?----</code>
 
-Quality: <code>{quality} {resolution} {bit} {codec}</code>
-Audio: <code>{audio}</code>
-Subtitles: <code>{subtitles}</code>
-
-<blockquote expandable>{plot}</blockquote>"""
+= <blockquote expandable>{plot}</blockquote>"""
 POST_ANIME_CAPTION = """<b>{title}</b>
 
 Quality: <code>{quality} {resolution} {bit} {codec}</code>

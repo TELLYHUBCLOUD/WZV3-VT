@@ -315,6 +315,12 @@ class TaskListener(TaskConfig):
             self.file_details["first_file"] = first_video
             if not self.file_details.get("filename"):
                 self.file_details["filename"] = first_video
+            if (
+                self.extract
+                and not self.video_tool
+                and not getattr(self, "rss_auto_leech", False)
+            ):
+                self.video_tool = True
 
         if auto_enabled(self) and not self.video_tool and not self.is_cancelled:
             up_path = await process_auto_pipeline(self, up_path, gid)
@@ -709,6 +715,9 @@ class TaskListener(TaskConfig):
             if multi_link_msg:
                 group_msg += multi_link_msg + "\n"
                 msg += multi_link_msg + "\n"
+            if attach_link := getattr(self, "attach_link", ""):
+                msg += f"Attach: <code>{escape(str(attach_link))}</code>\n"
+                group_msg += f"Attach: <code>{escape(str(attach_link))}</code>\n"
 
             if self.bot_pm and self.is_super_chat:
                 await send_message(self.user_id, msg, button)

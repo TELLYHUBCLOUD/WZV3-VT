@@ -24,7 +24,7 @@ from ..ext_utils.media_utils import (
 
 POSTER_SIZE = (1280, 720)
 TMDB_IMAGE = "https://image.tmdb.org/t/p/{size}{path}"
-POSTER_TEMPLATE_COUNT = 6
+POSTER_TEMPLATE_COUNT = 8
 
 
 def _bool(value, default=False):
@@ -671,6 +671,67 @@ def _template_six(bg, side, data, logo):
     return canvas
 
 
+def _template_seven(bg, side, data, logo):
+    canvas = _cover(bg, POSTER_SIZE).filter(ImageFilter.GaussianBlur(8))
+    shade = Image.new("RGBA", POSTER_SIZE, (0, 0, 0, 112))
+    canvas = Image.alpha_composite(canvas.convert("RGBA"), shade).convert("RGB")
+    draw = ImageDraw.Draw(canvas)
+    brand = _safe_text(data.get("brand"), "Anime Starfall").upper()
+    genres = _genre_list(data, 3) or ["Movie", "HD", "Release"]
+    draw.text((58, 48), brand, font=_font(18, True), fill=(255, 255, 255))
+    _top_nav(draw, genres, x=345, y=42, fill=(255, 255, 255), accent=(210, 160, 35))
+    panel = Image.new("RGBA", (620, 270), (255, 255, 255, 42))
+    panel = panel.filter(ImageFilter.GaussianBlur(0.2))
+    canvas.paste(panel.convert("RGB"), (48, 390))
+    draw.rounded_rectangle((48, 390, 668, 660), radius=28, outline=(255, 255, 255, 62), width=2)
+    _draw_wrapped(draw, (60, 230), _safe_text(data.get("title")).upper(), _font(54, True), "white", 650, 10, 3)
+    draw.text((60, 330), _meta_line(data).upper(), font=_font(24, True), fill=(240, 240, 240))
+    draw.rounded_rectangle((86, 430, 238, 485), radius=8, fill=(185, 135, 35))
+    draw.text((116, 448), "DOWNLOAD", font=_font(18, True), fill="white")
+    if rating := _rating_number(data.get("rating")):
+        draw.rounded_rectangle((285, 430, 455, 485), radius=8, fill=(130, 82, 34))
+        draw.text((315, 448), f"IMDb {rating}", font=_font(18, True), fill="white")
+    _draw_wrapped(draw, (78, 518), _short_plot(data), _font(20), (245, 245, 245), 535, 7, 4)
+    _paste_rounded(canvas, side, (820, 86, 330, 500), 16, 6)
+    _paste_logo(canvas, logo)
+    return canvas
+
+
+def _template_eight(bg, side, data, logo):
+    canvas = Image.new("RGB", POSTER_SIZE, (236, 226, 226))
+    draw = ImageDraw.Draw(canvas)
+    accent = (160, 96, 128)
+    draw.rectangle((0, 0, 365, 720), fill=accent)
+    for i in range(-120, 110, 18):
+        draw.line((i, 0, i + 150, 150), fill=(0, 0, 0), width=5)
+    draw.rounded_rectangle((500, 24, 850, 82), radius=28, outline=(0, 0, 0), width=2)
+    draw.ellipse((524, 36, 570, 82), outline=(0, 0, 0), width=4)
+    draw.line((560, 72, 584, 96), fill=(0, 0, 0), width=4)
+    draw.text((602, 43), _safe_text(data.get("brand"), "Anime Starfall").upper(), font=_font(22, True), fill=(0, 0, 0))
+    draw.text((926, 30), "HOME", font=_font(24, True), fill=(0, 0, 0))
+    draw.rounded_rectangle((1024, 20, 1142, 62), radius=20, fill=(0, 0, 0))
+    draw.text((1047, 32), "ANIME", font=_font(22, True), fill=(255, 255, 255))
+    draw.text((1170, 30), "MOVIE", font=_font(24, True), fill=(0, 0, 0))
+    _paste_rounded(canvas, side, (72, 72, 360, 540), 20, None)
+    _draw_wrapped(draw, (500, 192), _safe_text(data.get("title")).upper(), _font(42, True), (0, 0, 0), 610, 8, 2)
+    cx = 500
+    for genre in _genre_list(data, 3) or ["Action", "Adventure", "Fantasy"]:
+        w = max(130, min(185, 34 + len(genre) * 12))
+        draw.rounded_rectangle((cx, 314, cx + w, 358), radius=22, fill=(0, 0, 0))
+        draw.text((cx + 28, 326), genre.upper(), font=_font(18, True), fill=(255, 255, 255))
+        cx += w + 30
+    draw.text((500, 392), "SYNOPSIS :", font=_font(24, True), fill=(0, 0, 0))
+    _draw_wrapped(draw, (500, 420), _short_plot(data), _font(18, True), (0, 0, 0), 600, 4, 7)
+    for y in range(270, 535, 46):
+        draw.ellipse((1142, y, 1176, y + 34), fill=(190, 220, 230), outline=accent, width=3)
+    draw.ellipse((500, 634, 530, 664), fill=(0, 0, 0))
+    draw.ellipse((542, 634, 572, 664), fill=(0, 0, 0))
+    draw.ellipse((584, 634, 614, 664), fill=(0, 0, 0))
+    draw.text((720, 632), _safe_text(data.get("brand"), "Anime Starfall").upper(), font=_font(28, True), fill=(0, 0, 0))
+    _paste_logo(canvas, logo)
+    return canvas
+
+
 def _render_template(style, bg, side, data, logo=None):
     style = str(style or "1")
     renderers = {
@@ -680,6 +741,8 @@ def _render_template(style, bg, side, data, logo=None):
         "4": _template_four,
         "5": _template_five,
         "6": _template_six,
+        "7": _template_seven,
+        "8": _template_eight,
     }
     return renderers.get(style, _template_one)(bg, side, data, logo)
 

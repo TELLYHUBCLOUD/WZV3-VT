@@ -36,6 +36,7 @@ from ..helper.telegram_helper.message_utils import (
 )
 
 rss_dict_lock = Lock()
+rss_auto_leech_lock = Lock()
 handler_dict = {}
 size_regex = compile(r"(\d+(\.\d+)?\s?(GB|MB|KB|GiB|MiB|KiB))", I)
 
@@ -95,8 +96,27 @@ def _parse_feed(content):
     return feed_parse(content)
 
 
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+async def _run_rss_download(handler, msg, auto_leech=False):
+    if auto_leech:
+        async with rss_auto_leech_lock:
+            await handler(TgClient.bot, msg)
+        return
+    await handler(TgClient.bot, msg)
+
+
 async def _start_rss_download(
-    url, command, user_id, rss_chat_id, rss_topic_id, item_title
+    url, command, user_id, rss_chat_id, rss_topic_id, item_title, auto_leech=False
 ):
     """Send a notification to RSS_CHAT and start the download directly."""
     handler = resolve_command(command)
@@ -128,8 +148,9 @@ async def _start_rss_download(
     msg.text = cmd_text
     msg.from_user = user
     msg._rss_trigger = True
+    msg._rss_auto_leech = auto_leech
 
-    await handler(TgClient.bot, msg)
+    await _run_rss_download(handler, msg, auto_leech)
 
 
 async def rss_menu(event):
@@ -226,14 +247,18 @@ async def rss_sub(_, message, pre_event):
         inf_lists = []
         exf_lists = []
         if len(args) > 2:
-            arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None}
+            arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None, "-al": None}
             arg_parser(args[2:], arg_base)
             cmd = arg_base["-c"]
             inf = arg_base["-inf"]
             exf = arg_base["-exf"]
             stv = arg_base["-stv"]
+            auto_leech = _as_bool(arg_base["-al"], False)
             if stv is not None:
                 stv = stv.lower() == "true"
+            if auto_leech and not await CustomFilters.sudo("", message):
+                await send_message(message, f"{title}: only owner/sudo can enable RSS auto leech.")
+                continue
             if inf is not None:
                 filters_list = inf.split("|")
                 for x in filters_list:
@@ -249,6 +274,7 @@ async def rss_sub(_, message, pre_event):
             exf = None
             cmd = None
             stv = False
+            auto_leech = False
         try:
             async with AsyncClient(
                 headers=headers, follow_redirects=True, timeout=60
@@ -283,7 +309,10 @@ async def rss_sub(_, message, pre_event):
                     msg += f"\nSize: {get_readable_file_size(size)}"
             else:
                 msg += "\n<b>Note:</b> Feed is currently empty, will be monitored for new items."
+            if auto_leech and not cmd:
+                cmd = "leech"
             msg += f"\n<b>Command: </b><code>{cmd}</code>"
+            msg += f"\n<b>Auto Leech: </b><code>{auto_leech}</code>"
             msg += f"\n<b>Filters:-</b>\ninf: <code>{inf}</code>\nexf: <code>{exf}</code>\n<b>sensitive: </b>{stv}"
             async with rss_dict_lock:
                 if rss_dict.get(user_id, False):
@@ -295,6 +324,7 @@ async def rss_sub(_, message, pre_event):
                         "exf": exf_lists,
                         "paused": False,
                         "command": cmd,
+                        "auto_leech": auto_leech,
                         "sensitive": stv,
                         "tag": tag,
                     }
@@ -308,12 +338,13 @@ async def rss_sub(_, message, pre_event):
                             "exf": exf_lists,
                             "paused": False,
                             "command": cmd,
+                            "auto_leech": auto_leech,
                             "sensitive": stv,
                             "tag": tag,
                         }
                     }
             LOGGER.info(
-                f"Rss Feed Added: id: {user_id} - title: {title} - link: {feed_link} - c: {cmd} - inf: {inf} - exf: {exf} - stv {stv}"
+                f"Rss Feed Added: id: {user_id} - title: {title} - link: {feed_link} - c: {cmd} - inf: {inf} - exf: {exf} - stv {stv} - al {auto_leech}"
             )
         except (IndexError, AttributeError) as e:
             emsg = f"The link: {feed_link} doesn't seem to be a RSS feed or it's region-blocked!"
@@ -412,6 +443,7 @@ async def rss_list(query, start, all_users=False):
                     list_feed += f"\n\n<b>Title:</b> <code>{title}</code>\n"
                     list_feed += f"<b>Feed Url:</b> <code>{data['link']}</code>\n"
                     list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
+                    list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
                     list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                     list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                     list_feed += f"<b>Sensitive:</b> <code>{data.get('sensitive', False)}</code>\n"
@@ -427,6 +459,7 @@ async def rss_list(query, start, all_users=False):
             for title, data in list(rss_dict[user_id].items())[start : 5 + start]:
                 list_feed += f"\n\n<b>Title:</b> <code>{title}</code>\n<b>Feed Url: </b><code>{data['link']}</code>\n"
                 list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
+                list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
                 list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                 list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                 list_feed += (
@@ -526,16 +559,24 @@ async def rss_edit(_, message, pre_event):
         updated = True
         inf_lists = []
         exf_lists = []
-        arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None}
+        arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None, "-al": None}
         arg_parser(args[1:], arg_base)
         cmd = arg_base["-c"]
         inf = arg_base["-inf"]
         exf = arg_base["-exf"]
         stv = arg_base["-stv"]
+        auto_leech = arg_base["-al"]
         async with rss_dict_lock:
             if stv is not None:
                 stv = stv.lower() == "true"
                 rss_dict[user_id][title]["sensitive"] = stv
+            if auto_leech is not None:
+                if _as_bool(auto_leech, False) and not await CustomFilters.sudo("", message):
+                    await send_message(message, f"{title}: only owner/sudo can enable RSS auto leech.")
+                    continue
+                rss_dict[user_id][title]["auto_leech"] = _as_bool(auto_leech, False)
+                if rss_dict[user_id][title]["auto_leech"] and not rss_dict[user_id][title].get("command"):
+                    rss_dict[user_id][title]["command"] = "leech"
             if cmd is not None:
                 if cmd.lower() == "none":
                     cmd = None
@@ -917,7 +958,10 @@ async def rss_monitor():
                             break
                     if not parse:
                         continue
-                    if command := data["command"]:
+                    command = data.get("command")
+                    if data.get("auto_leech") and not command:
+                        command = "leech"
+                    if command:
                         if (
                             size
                             and Config.RSS_SIZE_LIMIT
@@ -932,6 +976,7 @@ async def rss_monitor():
                             rss_chat_id=rss_chat_id,
                             rss_topic_id=rss_topic_id,
                             item_title=item_title,
+                            auto_leech=data.get("auto_leech", False),
                         )
                     else:
                         feed_msg = f"<b>Name: </b><code>{item_title.replace('>', '').replace('<', '')}</code>"

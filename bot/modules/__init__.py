@@ -34,6 +34,7 @@ from .restart import (
 )
 from .imdb import imdb_search, imdb_callback
 from .poster_search import poster_search, poster_select
+from .sites import sites
 from .rss import get_rss_menu, rss_listener
 from .search import torrent_search, torrent_search_update, initiate_search_tools
 from .nzb_search import hydra_search
@@ -94,6 +95,7 @@ __all__ = [
     "imdb_callback",
     "poster_search",
     "poster_select",
+    "sites",
     "get_rss_menu",
     "rss_listener",
     "torrent_search",

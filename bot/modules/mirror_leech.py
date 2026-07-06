@@ -132,6 +132,7 @@ class Mirror(TaskListener):
             "-cv": "",
             "-ns": "",
             "-tl": "",
+            "-at": "",
             "-ff": set(),
             "-vt": False,
         }
@@ -182,8 +183,13 @@ class Mirror(TaskListener):
         self.name_swap = args["-ns"]
         self.hybrid_leech = args["-hl"]
         self.thumbnail_layout = args["-tl"]
+        self.attach_link = args["-at"]
         self.as_doc = args["-doc"]
         self.as_med = args["-med"]
+        self.rss_auto_leech = bool(getattr(self.message, "_rss_auto_leech", False))
+        if self.rss_auto_leech:
+            self.seed = False
+            self.force_global_upload = True
         bare_video_merge = "-m" in input_list and not args["-m"]
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]

@@ -2,6 +2,7 @@ from .bot_settings import send_bot_settings, edit_bot_settings
 from .cancel_task import cancel, cancel_multi, cancel_all_buttons, cancel_all_update
 from .chat_permission import authorize, unauthorize, add_sudo, remove_sudo
 from .clone import clone_node
+from .clone_channel import clone_channel
 from .create_torrent import create_torrent
 from .exec import aioexecute, execute, clear
 from .file_selector import select, confirm_selection
@@ -62,6 +63,7 @@ __all__ = [
     "add_sudo",
     "remove_sudo",
     "clone_node",
+    "clone_channel",
     "create_torrent",
     "aioexecute",
     "execute",

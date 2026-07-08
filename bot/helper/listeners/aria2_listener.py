@@ -135,7 +135,10 @@ async def _on_bt_download_complete(api, data):
             try:
                 await api.forcePause(gid)
             except (TimeoutError, ClientError, Exception) as e:
-                LOGGER.error(f"onBtDownloadComplete: {e} GID: {gid}")
+                if "cannot be paused now" in str(e).lower():
+                    LOGGER.warning(f"onBtDownloadComplete: {e} GID: {gid}")
+                else:
+                    LOGGER.error(f"onBtDownloadComplete: {e} GID: {gid}")
         await task.listener.on_download_complete()
         if intervals["stopAll"]:
             return

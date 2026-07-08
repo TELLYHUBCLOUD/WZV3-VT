@@ -191,6 +191,8 @@ class Mirror(TaskListener):
             self.seed = False
             self.force_global_upload = True
             self.force_auto_thumbnail = True
+            self.rss_item_title = getattr(self.message, "_rss_title", "")
+            self.rss_rename_mode = getattr(self.message, "_rss_rename_mode", "title")
         bare_video_merge = "-m" in input_list and not args["-m"]
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]

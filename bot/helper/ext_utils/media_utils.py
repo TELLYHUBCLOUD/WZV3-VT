@@ -1021,7 +1021,7 @@ def clean_rss_filename(filename):
     placeholders = {}
 
     def hold(match):
-        key = f"__RSSDATE{len(placeholders)}__"
+        key = f"RSSDATETOKEN{len(placeholders)}RSS"
         placeholders[key] = match.group(0)
         return key
 
@@ -1425,19 +1425,23 @@ async def _enrich_template_metadata(metadata, filename, filepath=None, extra=Non
             LOGGER.warning(f"Template media metadata failed for {filename}: {e}")
     metadata.setdefault("file_size", metadata.get("size", ""))
     metadata["size"] = metadata.get("size") or metadata.get("file_size", "")
+    if not metadata.get("languages") and metadata.get("language"):
+        metadata["languages"] = metadata.get("language", "")
+    if not metadata.get("language") and metadata.get("languages"):
+        metadata["language"] = metadata.get("languages", "")
     metadata["shortlang"] = metadata.get("shortlang") or _short_language_tag(metadata.get("languages", ""))
     metadata["shortsub"] = metadata.get("shortsub") or _short_subtitle_tag(
         metadata.get("subtitles", ""), filename
     )
     metadata["DS4K"] = metadata.get("DS4K") or ("DS4K" if _has_ds4k(filename) else "")
     for key in (
-        "file_name", "file_size", "file_caption", "languages", "subtitles",
-        "duration", "ott", "resolution", "name", "title", "year", "quality",
+        "file_name", "file_size", "file_caption", "languages", "language", "subtitles",
+        "duration", "ott", "source", "resolution", "name", "title", "year", "quality",
         "season", "episode", "audio", "lib", "extension", "shortsub",
         "shortlang", "part", "raw_name", "link", "vcodec", "codec", "acodec",
         "audio_codec", "audio_channels", "audio_bitrate", "hdr",
         "dynamic_range", "release_group", "group", "DS4K", "bit", "size",
-        "date", "episode_name",
+        "date", "episode_name", "episodes", "genres", "rating", "plot", "synopsis",
     ):
         metadata.setdefault(key, "")
     return metadata
@@ -1630,6 +1634,10 @@ async def build_caption_metadata(filename, filepath=None, **extra):
         )
 
     metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
+    if not metadata.get("languages") and metadata.get("language"):
+        metadata["languages"] = metadata.get("language", "")
+    if not metadata.get("language") and metadata.get("languages"):
+        metadata["language"] = metadata.get("languages", "")
     return _SafeFormatDict(metadata)
 
 

@@ -123,14 +123,17 @@ DEFAULT_VALUES = {
     "POST_LOGO": "",
     "SITES_LINKS": "",
     "POST_MOVIE_CAPTION": (
-        "<b>「 {title} 」</b>\n"
+        "<b>「 {title} - {year} 」</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "<code>╔════◇═══════════◇════\n"
-        "║ IMDb ➤ {rating}\n"
-        "║ Quality ➤ {resolution} {bit} {ott} {source} {codec}\n"
-        "║ Audio ➤ {language} - {audio_codec} {audio_channels}\n"
-        "╚════◇═══════════◇════</code>\n\n"
-        "≡ <blockquote expandable>{plot}</blockquote>"
+        "╔════◇═══════════◇════\n"
+        "║ Season ➤ {season} ( {episodes} Episodes )\n"
+        "║ IMBD ➤ {rating} Rating \n"
+        "║ Genres ➤ {genres} \n"
+        "║ Quality ➤ {resolution} {bit} {codec}\n"
+        "║ Audio ➤ {languages} {audio_codec} {audio_channels} ~ {shortsub} \n"
+        "╚════◇═══════════◇════\n\n"
+        "<blockquote expandable>Synopsis :\n"
+        "   {plot}</blockquote>"
     ),
     "POST_ANIME_CAPTION": (
         "<b>{title}</b>\n\n"

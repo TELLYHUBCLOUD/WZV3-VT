@@ -131,8 +131,24 @@ def _command_with_upload_dest(command, upload_dest):
     return f"{command} -up {upload_dest}"
 
 
+def _rss_rename_mode(value):
+    value = str(value or "title").strip().lower()
+    if value in {"none", "off", "false", "0"}:
+        return "none"
+    if value in {"remove_dots", "removedots", "dots", "clean"}:
+        return "remove_dots"
+    return "title"
+
+
 async def _start_rss_download(
-    url, command, user_id, rss_chat_id, rss_topic_id, item_title, auto_leech=False
+    url,
+    command,
+    user_id,
+    rss_chat_id,
+    rss_topic_id,
+    item_title,
+    auto_leech=False,
+    rename_mode="title",
 ):
     """Send a notification to RSS_CHAT and start the download directly."""
     handler = resolve_command(command)
@@ -165,6 +181,8 @@ async def _start_rss_download(
     msg.from_user = user
     msg._rss_trigger = True
     msg._rss_auto_leech = auto_leech
+    msg._rss_title = item_title
+    msg._rss_rename_mode = _rss_rename_mode(rename_mode)
 
     await _run_rss_download(handler, msg, auto_leech)
 
@@ -270,6 +288,7 @@ async def rss_sub(_, message, pre_event):
                 "-stv": None,
                 "-al": None,
                 "-up": None,
+                "-ar": None,
             }
             arg_parser(args[2:], arg_base)
             cmd = arg_base["-c"]
@@ -278,6 +297,7 @@ async def rss_sub(_, message, pre_event):
             stv = arg_base["-stv"]
             auto_leech = _as_bool(arg_base["-al"], False)
             upload_dest = arg_base["-up"]
+            rename_mode = _rss_rename_mode(arg_base["-ar"])
             if stv is not None:
                 stv = stv.lower() == "true"
             if auto_leech and not await CustomFilters.sudo("", message):
@@ -300,6 +320,7 @@ async def rss_sub(_, message, pre_event):
             stv = False
             auto_leech = False
             upload_dest = None
+            rename_mode = "title"
         try:
             async with AsyncClient(
                 headers=headers, follow_redirects=True, timeout=60
@@ -340,6 +361,7 @@ async def rss_sub(_, message, pre_event):
             msg += f"\n<b>Command: </b><code>{cmd}</code>"
             msg += f"\n<b>Auto Leech: </b><code>{auto_leech}</code>"
             msg += f"\n<b>Upload Dest: </b><code>{upload_dest}</code>"
+            msg += f"\n<b>AutoRename: </b><code>{rename_mode}</code>"
             msg += f"\n<b>Filters:-</b>\ninf: <code>{inf}</code>\nexf: <code>{exf}</code>\n<b>sensitive: </b>{stv}"
             async with rss_dict_lock:
                 if rss_dict.get(user_id, False):
@@ -353,6 +375,7 @@ async def rss_sub(_, message, pre_event):
                         "command": cmd,
                         "auto_leech": auto_leech,
                         "upload_dest": upload_dest,
+                        "rename_mode": rename_mode,
                         "sensitive": stv,
                         "tag": tag,
                     }
@@ -368,6 +391,7 @@ async def rss_sub(_, message, pre_event):
                             "command": cmd,
                             "auto_leech": auto_leech,
                             "upload_dest": upload_dest,
+                            "rename_mode": rename_mode,
                             "sensitive": stv,
                             "tag": tag,
                         }
@@ -474,6 +498,7 @@ async def rss_list(query, start, all_users=False):
                     list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
                     list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
                     list_feed += f"<b>Upload Dest:</b> <code>{data.get('upload_dest')}</code>\n"
+                    list_feed += f"<b>AutoRename:</b> <code>{data.get('rename_mode', 'title')}</code>\n"
                     list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                     list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                     list_feed += f"<b>Sensitive:</b> <code>{data.get('sensitive', False)}</code>\n"
@@ -491,6 +516,7 @@ async def rss_list(query, start, all_users=False):
                 list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
                 list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
                 list_feed += f"<b>Upload Dest:</b> <code>{data.get('upload_dest')}</code>\n"
+                list_feed += f"<b>AutoRename:</b> <code>{data.get('rename_mode', 'title')}</code>\n"
                 list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                 list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                 list_feed += (
@@ -597,6 +623,7 @@ async def rss_edit(_, message, pre_event):
             "-stv": None,
             "-al": None,
             "-up": None,
+            "-ar": None,
         }
         arg_parser(args[1:], arg_base)
         cmd = arg_base["-c"]
@@ -605,6 +632,7 @@ async def rss_edit(_, message, pre_event):
         stv = arg_base["-stv"]
         auto_leech = arg_base["-al"]
         upload_dest = arg_base["-up"]
+        rename_mode = arg_base["-ar"]
         async with rss_dict_lock:
             if stv is not None:
                 stv = stv.lower() == "true"
@@ -628,6 +656,8 @@ async def rss_edit(_, message, pre_event):
                     rss_dict[user_id][title].get("command"),
                     upload_dest,
                 )
+            if rename_mode is not None:
+                rss_dict[user_id][title]["rename_mode"] = _rss_rename_mode(rename_mode)
             if inf is not None:
                 if inf.lower() != "none":
                     filters_list = inf.split("|")
@@ -1028,6 +1058,7 @@ async def rss_monitor():
                             rss_topic_id=rss_topic_id,
                             item_title=item_title,
                             auto_leech=data.get("auto_leech", False),
+                            rename_mode=data.get("rename_mode", "title"),
                         )
                     else:
                         feed_msg = f"<b>Name: </b><code>{item_title.replace('>', '').replace('<', '')}</code>"

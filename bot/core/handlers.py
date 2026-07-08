@@ -340,6 +340,13 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            clone_channel,
+            filters=command(f"clonechannel{Config.CMD_SUFFIX}", case_sensitive=True)
+            & CustomFilters.owner,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             ping,
             filters=command(BotCommands.PingCommand, case_sensitive=True)
             & CustomFilters.authorized,

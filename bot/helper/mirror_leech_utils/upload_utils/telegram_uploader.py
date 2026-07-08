@@ -133,6 +133,9 @@ class TelegramUploader:
             self._thumb = None
 
     async def _msg_to_reply(self):
+        if getattr(self._listener, "rss_auto_leech", False):
+            self._sent_msg = self._listener.message
+            return True
         if self._listener.up_dest:
             msg_link = (
                 self._listener.message.link if self._listener.is_super_chat else ""
@@ -197,6 +200,25 @@ class TelegramUploader:
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
+        rss_rename_mode = getattr(self._listener, "rss_rename_mode", "")
+        if getattr(self._listener, "rss_auto_leech", False) and rss_rename_mode in (
+            "title",
+            "remove_dots",
+        ):
+            rss_title = str(getattr(self._listener, "rss_item_title", "") or "").strip()
+            if rss_title:
+                _, rss_ext = ospath.splitext(rss_title)
+                _, file_ext = ospath.splitext(pre_file_)
+                file_ = rss_title if rss_ext else f"{rss_title}{file_ext}"
+                if rss_rename_mode == "remove_dots":
+                    file_ = clean_rss_filename(file_)
+                cap_file_ = file_
+                self._listener.skip_auto_rename = True
+                rss_skip_prefix_suffix = True
+            else:
+                rss_skip_prefix_suffix = False
+        else:
+            rss_skip_prefix_suffix = False
         # AutoRename logic: apply before prefix/suffix
         autorename_enabled = (
             self._listener.user_dict.get("AUTORENAME")
@@ -248,17 +270,21 @@ class TelegramUploader:
             except Exception as e:
                 LOGGER.warning(f"AutoRename failed for {pre_file_}: {e}")
 
-        if getattr(self._listener, "rss_auto_leech", False):
+        if (
+            getattr(self._listener, "rss_auto_leech", False)
+            and not rss_skip_prefix_suffix
+            and rss_rename_mode == "remove_dots"
+        ):
             file_ = clean_rss_filename(file_)
             cap_file_ = clean_rss_filename(cap_file_)
 
-        if self._lprefix:
+        if self._lprefix and not rss_skip_prefix_suffix:
             cap_file_ = self._lprefix.replace(r"\s", " ") + file_
             self._lprefix = re_sub(r"<.*?>", "", self._lprefix).replace(r"\s", " ")
             if not file_.startswith(self._lprefix):
                 file_ = f"{self._lprefix}{file_}"
 
-        if self._lsuffix:
+        if self._lsuffix and not rss_skip_prefix_suffix:
             name, ext = ospath.splitext(cap_file_)
             cap_file_ = name + self._lsuffix.replace(r"\s", " ") + ext
             self._lsuffix = re_sub(r"<.*?>", "", self._lsuffix).replace(r"\s", " ")

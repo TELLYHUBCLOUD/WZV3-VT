@@ -9,7 +9,7 @@ DATABASE_URL = ""
 DEFAULT_LANG = "en"
 TG_PROXY = (
     {}
-)  # {"scheme": ”socks5”, "hostname": ””, "port": 1234, "username": ”user”, "password": ”pass”}
+)  # {"scheme": â€socks5â€, "hostname": â€â€, "port": 1234, "username": â€userâ€, "password": â€passâ€}
 USER_SESSION_STRING = ""
 CMD_SUFFIX = ""
 AUTHORIZED_CHATS = ""
@@ -31,15 +31,18 @@ POST_TEMPLATE_ID = 1  # 1..8
 POST_BRAND_NAME = "Anime Starfall"
 POST_LOGO = ""  # local path or URL
 SITES_LINKS = ""  # Useful links for /sites. Use JSON {"Name":"https://..."} or lines "Name | https://..."
-POST_MOVIE_CAPTION = """<b>? {title} ?</b>
-??????????????????
-<code>+----?-----------?----
-� IMDb ? {rating}
-� Quality ? {resolution} {bit} {ott} {source} {codec}
-� Audio ? {language} - {audio_codec} {audio_channels}
-+----?-----------?----</code>
+POST_MOVIE_CAPTION = """<b>「 {title} - {year} 」</b>
+━━━━━━━━━━━━━━━━━━
+╔════◇═══════════◇════
+║ Season ➤ {season} ( {episodes} Episodes )
+║ IMBD ➤ {rating} Rating
+║ Genres ➤ {genres}
+║ Quality ➤ {resolution} {bit} {codec}
+║ Audio ➤ {languages} {audio_codec} {audio_channels} ~ {shortsub}
+╚════◇═══════════◇════
 
-= <blockquote expandable>{plot}</blockquote>"""
+<blockquote expandable>Synopsis :
+   {plot}</blockquote>"""
 POST_ANIME_CAPTION = """<b>{title}</b>
 
 Quality: <code>{quality} {resolution} {bit} {codec}</code>
@@ -232,7 +235,7 @@ HYDRA_API_KEY = ""
 # Media Search
 IMDB_TEMPLATE = """<b>Title: </b> {title} [{year}]
 <b>Also Known As:</b> {aka}
-<b>Rating ⭐️:</b> <i>{rating}</i>
+<b>Rating â­ï¸:</b> <i>{rating}</i>
 <b>Release Info: </b> <a href="{url_releaseinfo}">{release_date}</a>
 <b>Genre: </b>{genres}
 <b>IMDb URL:</b> {url}

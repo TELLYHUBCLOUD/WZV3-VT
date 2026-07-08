@@ -1016,6 +1016,23 @@ def _clean_rename_token(value):
     return value.strip(" -._")
 
 
+def clean_rss_filename(filename):
+    stem, ext = ospath.splitext(str(filename or ""))
+    placeholders = {}
+
+    def hold(match):
+        key = f"__RSSDATE{len(placeholders)}__"
+        placeholders[key] = match.group(0)
+        return key
+
+    stem = re.sub(r"(?<!\d)(?:\d{2}|\d{4})[._-]\d{2}[._-]\d{2}(?!\d)", hold, stem)
+    stem = re.sub(r"[._]+", " ", stem)
+    stem = re.sub(r"\s+", " ", stem).strip()
+    for key, value in placeholders.items():
+        stem = stem.replace(key, value.replace("_", ".").replace("-", "."))
+    return f"{stem}{ext}" if stem else filename
+
+
 class _SafeFormatDict(dict):
     def __missing__(self, key):
         return ""
@@ -1373,6 +1390,22 @@ async def _enrich_template_metadata(metadata, filename, filepath=None, extra=Non
     metadata["link"] = metadata.get("link", "")
     metadata["part"] = metadata.get("part") or _extract_part_tag(filename)
     metadata["audio"] = metadata.get("audio") or _extract_audio_tag(filename)
+    date_match = re.search(
+        r"(?<!\d)((?:\d{2}|\d{4})[._-]\d{2}[._-]\d{2})(?!\d)",
+        filename,
+    )
+    if date_match and not metadata.get("date"):
+        metadata["date"] = date_match.group(1).replace("_", ".").replace("-", ".")
+    if not metadata.get("episode_name"):
+        stem_after_date = raw_name
+        if date_match:
+            stem_after_date = raw_name[date_match.end():]
+        stem_after_date = re.split(
+            r"(?i)(?:\b(?:xxx|porn|jav|1080p|720p|480p|2160p|4k|hevc|x265|x264|web[-_. ]?dl|bluray)\b)",
+            stem_after_date.replace(".", " ").replace("_", " "),
+            maxsplit=1,
+        )[0]
+        metadata["episode_name"] = re.sub(r"\s+", " ", stem_after_date).strip(" -._")
 
     if filepath and await aiopath.exists(filepath):
         try:
@@ -1404,6 +1437,7 @@ async def _enrich_template_metadata(metadata, filename, filepath=None, extra=Non
         "shortlang", "part", "raw_name", "link", "vcodec", "codec", "acodec",
         "audio_codec", "audio_channels", "audio_bitrate", "hdr",
         "dynamic_range", "release_group", "group", "DS4K", "bit", "size",
+        "date", "episode_name",
     ):
         metadata.setdefault(key, "")
     return metadata
@@ -2017,6 +2051,8 @@ async def extract_metadata_from_filename(filename, filepath=None):
         "start": "",
         "end": "",
         "range": "",
+        "date": "",
+        "episode_name": "",
     }
 
     pattern = (
@@ -2035,6 +2071,13 @@ async def extract_metadata_from_filename(filename, filepath=None):
         metadata["end"] = merge_range.group(3).zfill(2)
         metadata["range"] = f"EP({metadata['start']}-{metadata['end']})"
         metadata["episode"] = metadata["range"]
+
+    date_match = re.search(
+        r"(?<!\d)((?:\d{2}|\d{4})[._-]\d{2}[._-]\d{2})(?!\d)",
+        clean_filename,
+    )
+    if date_match:
+        metadata["date"] = date_match.group(1).replace("_", ".").replace("-", ".")
 
     title_patterns = [
         r"^(.+?)[\s\.\-]*(?<![A-Za-z0-9])[Ss]0*(\d{1,2})[\s\.\-]*[Ee]0*(\d{1,4})(?![A-Za-z0-9])",
@@ -2109,6 +2152,15 @@ async def extract_metadata_from_filename(filename, filepath=None):
     )
     if season_match:
         metadata["season"] = season_match.group(1)
+
+    if metadata.get("date") and not metadata.get("episode_name"):
+        after_date = clean_filename[date_match.end():] if date_match else ""
+        after_date = re.split(
+            r"(?i)(?:\b(?:xxx|porn|jav|1080p|720p|480p|2160p|4k|hevc|x265|x264|web[-_. ]?dl|bluray)\b)",
+            after_date.replace(".", " ").replace("_", " "),
+            maxsplit=1,
+        )[0]
+        metadata["episode_name"] = re.sub(r"\s+", " ", after_date).strip(" -._")
 
     if not episode_found:
         episode_patterns = [
@@ -2798,5 +2850,5 @@ async def get_anime_landscape_thumbnail(video_file, raw_filename, duration=None,
             LOGGER.info("Anime landscape thumbnail selected from metadata provider")
             return thumb
 
-    LOGGER.info("Anime metadata thumbnail missing; using FFmpeg frame fallback")
-    return await get_video_thumbnail(video_file, duration)
+    LOGGER.info("Anime metadata thumbnail missing; continuing provider fallback")
+    return None

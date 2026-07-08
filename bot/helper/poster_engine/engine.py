@@ -53,6 +53,11 @@ def _safe_text(value, default=""):
     return value.strip() or default
 
 
+class _SafeCaptionDict(dict):
+    def __missing__(self, key):
+        return ""
+
+
 def _clean_search_title(filename, extracted=""):
     candidates = [extracted, filename]
     for candidate in candidates:
@@ -484,18 +489,9 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         file_caption=file_caption,
         link=link,
     )
-    for key in (
-        "quality",
-        "resolution",
-        "bit",
-        "codec",
-        "audio",
-        "subtitles",
-        "shortlang",
-        "shortsub",
-    ):
+    for key, value in caption_data.items():
         if not data.get(key):
-            data[key] = caption_data.get(key, "")
+            data[key] = value
     return data
 
 
@@ -778,7 +774,9 @@ def _caption_template(user_dict, category):
 
 def build_post_caption(user_dict, metadata):
     template = _caption_template(user_dict or {}, metadata.get("category"))
-    values = {k: escape(_safe_text(v), quote=False) for k, v in metadata.items()}
+    values = _SafeCaptionDict(
+        {k: escape(_safe_text(v), quote=False) for k, v in metadata.items()}
+    )
     values.setdefault("name", values.get("title", ""))
     try:
         return template.format_map(values)

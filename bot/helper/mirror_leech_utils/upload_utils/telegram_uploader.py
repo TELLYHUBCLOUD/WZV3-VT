@@ -47,6 +47,7 @@ from ...ext_utils.media_utils import (
     apply_template_rename,
     build_caption_metadata,
     choose_media_title_seed,
+    clean_rss_filename,
     download_image_thumb,
     get_anime_landscape_thumbnail,
     get_audio_thumbnail,
@@ -246,6 +247,10 @@ class TelegramUploader:
                         cap_file_ = file_
             except Exception as e:
                 LOGGER.warning(f"AutoRename failed for {pre_file_}: {e}")
+
+        if getattr(self._listener, "rss_auto_leech", False):
+            file_ = clean_rss_filename(file_)
+            cap_file_ = clean_rss_filename(cap_file_)
 
         if self._lprefix:
             cap_file_ = self._lprefix.replace(r"\s", " ") + file_
@@ -716,6 +721,8 @@ class TelegramUploader:
                 )
                 if getattr(self._listener, "skip_auto_thumbnail", False):
                     auto_thumb_enabled = False
+                if getattr(self._listener, "force_auto_thumbnail", False):
+                    auto_thumb_enabled = True
                 if auto_thumb_enabled:
                     LOGGER.info(f"Auto-thumbnail enabled for: {file}")
                     try:

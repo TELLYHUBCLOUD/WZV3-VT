@@ -318,6 +318,7 @@ class TaskListener(TaskConfig):
             if (
                 self.extract
                 and not self.video_tool
+                and bool_setting(self, "AUTO_VT")
                 and not getattr(self, "rss_auto_leech", False)
             ):
                 self.video_tool = True

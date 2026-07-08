@@ -190,6 +190,7 @@ class Mirror(TaskListener):
         if self.rss_auto_leech:
             self.seed = False
             self.force_global_upload = True
+            self.force_auto_thumbnail = True
         bare_video_merge = "-m" in input_list and not args["-m"]
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]

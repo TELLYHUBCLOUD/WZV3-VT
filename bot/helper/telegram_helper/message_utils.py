@@ -461,6 +461,8 @@ async def update_status_message(sid, force=False):
 async def send_status_message(msg, user_id=0):
     if intervals["stopAll"]:
         return
+    if getattr(msg, "_rss_auto_leech", False):
+        return
     sid = user_id or msg.chat.id
     is_user = bool(user_id)
     async with task_dict_lock:

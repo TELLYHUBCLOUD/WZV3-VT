@@ -97,15 +97,26 @@ async def get_task_by_gid(gid: str):
 
 
 async def get_specific_tasks(status, user_id):
+    def visible_task(tk):
+        return not getattr(tk.listener, "rss_auto_leech", False)
+
     if status == "All":
         if user_id:
-            return [tk for tk in task_dict.values() if tk.listener.user_id == user_id]
+            return [
+                tk
+                for tk in task_dict.values()
+                if tk.listener.user_id == user_id and visible_task(tk)
+            ]
         else:
-            return list(task_dict.values())
+            return [tk for tk in task_dict.values() if visible_task(tk)]
     tasks_to_check = (
-        [tk for tk in task_dict.values() if tk.listener.user_id == user_id]
+        [
+            tk
+            for tk in task_dict.values()
+            if tk.listener.user_id == user_id and visible_task(tk)
+        ]
         if user_id
-        else list(task_dict.values())
+        else [tk for tk in task_dict.values() if visible_task(tk)]
     )
     coro_tasks = []
     coro_tasks.extend(tk for tk in tasks_to_check if iscoroutinefunction(tk.status))

@@ -108,11 +108,27 @@ def _as_bool(value, default=False):
 
 
 async def _run_rss_download(handler, msg, auto_leech=False):
+    async def run_and_wait():
+        task = await handler(TgClient.bot, msg)
+        if task is not None and hasattr(task, "__await__"):
+            await task
+
     if auto_leech:
         async with rss_auto_leech_lock:
-            await handler(TgClient.bot, msg)
+            await run_and_wait()
         return
-    await handler(TgClient.bot, msg)
+    await run_and_wait()
+
+
+def _command_with_upload_dest(command, upload_dest):
+    if not command:
+        return command
+    upload_dest = str(upload_dest or "").strip()
+    if not upload_dest:
+        return command
+    if " -up " in f" {command} ":
+        return command
+    return f"{command} -up {upload_dest}"
 
 
 async def _start_rss_download(
@@ -247,13 +263,21 @@ async def rss_sub(_, message, pre_event):
         inf_lists = []
         exf_lists = []
         if len(args) > 2:
-            arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None, "-al": None}
+            arg_base = {
+                "-c": None,
+                "-inf": None,
+                "-exf": None,
+                "-stv": None,
+                "-al": None,
+                "-up": None,
+            }
             arg_parser(args[2:], arg_base)
             cmd = arg_base["-c"]
             inf = arg_base["-inf"]
             exf = arg_base["-exf"]
             stv = arg_base["-stv"]
             auto_leech = _as_bool(arg_base["-al"], False)
+            upload_dest = arg_base["-up"]
             if stv is not None:
                 stv = stv.lower() == "true"
             if auto_leech and not await CustomFilters.sudo("", message):
@@ -275,6 +299,7 @@ async def rss_sub(_, message, pre_event):
             cmd = None
             stv = False
             auto_leech = False
+            upload_dest = None
         try:
             async with AsyncClient(
                 headers=headers, follow_redirects=True, timeout=60
@@ -311,8 +336,10 @@ async def rss_sub(_, message, pre_event):
                 msg += "\n<b>Note:</b> Feed is currently empty, will be monitored for new items."
             if auto_leech and not cmd:
                 cmd = "leech"
+            cmd = _command_with_upload_dest(cmd, upload_dest)
             msg += f"\n<b>Command: </b><code>{cmd}</code>"
             msg += f"\n<b>Auto Leech: </b><code>{auto_leech}</code>"
+            msg += f"\n<b>Upload Dest: </b><code>{upload_dest}</code>"
             msg += f"\n<b>Filters:-</b>\ninf: <code>{inf}</code>\nexf: <code>{exf}</code>\n<b>sensitive: </b>{stv}"
             async with rss_dict_lock:
                 if rss_dict.get(user_id, False):
@@ -325,6 +352,7 @@ async def rss_sub(_, message, pre_event):
                         "paused": False,
                         "command": cmd,
                         "auto_leech": auto_leech,
+                        "upload_dest": upload_dest,
                         "sensitive": stv,
                         "tag": tag,
                     }
@@ -339,6 +367,7 @@ async def rss_sub(_, message, pre_event):
                             "paused": False,
                             "command": cmd,
                             "auto_leech": auto_leech,
+                            "upload_dest": upload_dest,
                             "sensitive": stv,
                             "tag": tag,
                         }
@@ -444,6 +473,7 @@ async def rss_list(query, start, all_users=False):
                     list_feed += f"<b>Feed Url:</b> <code>{data['link']}</code>\n"
                     list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
                     list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
+                    list_feed += f"<b>Upload Dest:</b> <code>{data.get('upload_dest')}</code>\n"
                     list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                     list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                     list_feed += f"<b>Sensitive:</b> <code>{data.get('sensitive', False)}</code>\n"
@@ -460,6 +490,7 @@ async def rss_list(query, start, all_users=False):
                 list_feed += f"\n\n<b>Title:</b> <code>{title}</code>\n<b>Feed Url: </b><code>{data['link']}</code>\n"
                 list_feed += f"<b>Command:</b> <code>{data['command']}</code>\n"
                 list_feed += f"<b>Auto Leech:</b> <code>{data.get('auto_leech', False)}</code>\n"
+                list_feed += f"<b>Upload Dest:</b> <code>{data.get('upload_dest')}</code>\n"
                 list_feed += f"<b>Inf:</b> <code>{data['inf']}</code>\n"
                 list_feed += f"<b>Exf:</b> <code>{data['exf']}</code>\n"
                 list_feed += (
@@ -559,13 +590,21 @@ async def rss_edit(_, message, pre_event):
         updated = True
         inf_lists = []
         exf_lists = []
-        arg_base = {"-c": None, "-inf": None, "-exf": None, "-stv": None, "-al": None}
+        arg_base = {
+            "-c": None,
+            "-inf": None,
+            "-exf": None,
+            "-stv": None,
+            "-al": None,
+            "-up": None,
+        }
         arg_parser(args[1:], arg_base)
         cmd = arg_base["-c"]
         inf = arg_base["-inf"]
         exf = arg_base["-exf"]
         stv = arg_base["-stv"]
         auto_leech = arg_base["-al"]
+        upload_dest = arg_base["-up"]
         async with rss_dict_lock:
             if stv is not None:
                 stv = stv.lower() == "true"
@@ -581,6 +620,14 @@ async def rss_edit(_, message, pre_event):
                 if cmd.lower() == "none":
                     cmd = None
                 rss_dict[user_id][title]["command"] = cmd
+            if upload_dest is not None:
+                if upload_dest.lower() == "none":
+                    upload_dest = None
+                rss_dict[user_id][title]["upload_dest"] = upload_dest
+                rss_dict[user_id][title]["command"] = _command_with_upload_dest(
+                    rss_dict[user_id][title].get("command"),
+                    upload_dest,
+                )
             if inf is not None:
                 if inf.lower() != "none":
                     filters_list = inf.split("|")
@@ -961,6 +1008,10 @@ async def rss_monitor():
                     command = data.get("command")
                     if data.get("auto_leech") and not command:
                         command = "leech"
+                    command = _command_with_upload_dest(
+                        command,
+                        data.get("upload_dest"),
+                    )
                     if command:
                         if (
                             size

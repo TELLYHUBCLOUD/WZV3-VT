@@ -82,7 +82,8 @@ TEMPLATE_VARIABLES_TEXT = (
     "{year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} "
     "{shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} "
     "{acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} "
-    "{dynamic_range} {release_group} {group} {start} {end} {range}"
+    "{dynamic_range} {release_group} {group} {start} {end} {range} "
+    "{date} {episode_name}"
 )
 
 leech_options = [
@@ -466,7 +467,7 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button("Leech Settings", f"userset {user_id} leech")
         buttons.data_button("Post Settings", f"userset {user_id} post")
         buttons.data_button("Auto Process", f"userset {user_id} autoprocess")
-        buttons.data_button("FF Media Settings", f"userset {user_id} ffset")
+        buttons.data_button("Metadata", f"userset {user_id} ffset")
         buttons.data_button("User Settings Zip", f"userset {user_id} zip")
         buttons.data_button("Import Settings Zip", f"userset {user_id} zipimport")
         buttons.data_button(
@@ -1360,6 +1361,9 @@ Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
                 ]
             )
 
+        buttons.data_button(
+            "Set Channel Metadata", f"userset {user_id} metachannel", "header"
+        )
         buttons.data_button("Metadata", f"userset {user_id} menu METADATA")
         metadata_setting = user_dict.get("METADATA")
         display_meta_val = "<b>Not Set</b>"
@@ -1416,8 +1420,10 @@ Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
 ┠ <b>Video Metadata</b> → {display_video_meta}
 ┖ <b>Subtitle Metadata</b> → {display_subtitle_meta}"""
 
-        text = f"""<b>FF Media Settings</b>
+        text = f"""<b>Metadata Settings</b>
 <b>Name:</b> {user_name}
+
+Use <b>Set Channel Metadata</b> to clear old metadata and apply one channel name to global, video, audio, and subtitle metadata.
 
 Default Metadata: {display_meta_val}
 Audio Metadata: {display_audio_meta}
@@ -1731,6 +1737,66 @@ async def set_option(_, message, option, rfunc):
             return
     update_user_ldata(user_id, option, value)
     await delete_message(message)
+    await rfunc()
+    await database.update_user_data(user_id)
+
+
+@new_task
+async def set_channel_metadata(_, message, rfunc):
+    user_id = message.from_user.id
+    handler_dict[user_id] = False
+    channel = str(message.text or "").strip()
+    if not channel:
+        await send_message(message, "Send a channel name, for example: <code>@Anime_Starfall</code>")
+        return
+
+    clean_channel = " ".join(channel.split())
+    if clean_channel.startswith("https://t.me/"):
+        clean_channel = "@" + clean_channel.rsplit("/", 1)[-1].strip()
+    brand = clean_channel
+    safe_brand = brand.lstrip("@") or brand
+    global_metadata = {
+        "title": "{basename}",
+        "artist": brand,
+        "album": brand,
+        "album_artist": brand,
+        "composer": brand,
+        "genre": "Anime",
+        "publisher": brand,
+        "copyright": brand,
+        "comment": f"Encoded by {brand}",
+        "encoder": "FFmpeg",
+        "description": "{basename}",
+        "synopsis": "{basename}",
+        "network": safe_brand,
+    }
+    video_metadata = {
+        "title": "{basename}",
+        "handler_name": brand,
+        "comment": brand,
+        "encoder": brand,
+    }
+    audio_metadata = {
+        "title": "{basename} - {audiolang}",
+        "handler_name": brand,
+        "comment": brand,
+        "encoder": brand,
+    }
+    subtitle_metadata = {
+        "title": "{basename} - {sublang}",
+        "handler_name": brand,
+        "comment": brand,
+        "encoder": brand,
+    }
+    update_user_ldata(user_id, "METADATA", global_metadata)
+    update_user_ldata(user_id, "VIDEO_METADATA", video_metadata)
+    update_user_ldata(user_id, "AUDIO_METADATA", audio_metadata)
+    update_user_ldata(user_id, "SUBTITLE_METADATA", subtitle_metadata)
+    await delete_message(message)
+    await send_message(
+        message,
+        f"Metadata channel set to <code>{escape(brand)}</code> for global, video, audio, and subtitles.",
+    )
     await rfunc()
     await database.update_user_data(user_id)
 
@@ -2233,6 +2299,20 @@ async def edit_user_settings(client, query):
         await edit_message(message, prompts[data[2]], buttons.build_menu(1))
         rfunc = partial(update_user_settings, query, "userbot")
         pfunc = partial(funcs[data[2]], rfunc=rfunc)
+        await event_handler(client, query, pfunc, rfunc)
+    elif data[2] == "metachannel":
+        await query.answer()
+        buttons = ButtonMaker()
+        buttons.data_button("Stop", f"userset {user_id} ffset")
+        buttons.data_button("Back", f"userset {user_id} ffset", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        await edit_message(
+            message,
+            "Send the channel name to use for all metadata.\nExample: <code>@Anime_Starfall</code>\nTimeout: 60 sec",
+            buttons.build_menu(1),
+        )
+        rfunc = partial(update_user_settings, query, "ffset")
+        pfunc = partial(set_channel_metadata, rfunc=rfunc)
         await event_handler(client, query, pfunc, rfunc)
     elif data[2] == "helpertest":
         if config_bool(Config.HELPER_TOKEN_PIN_REQUIRED, True) and not starfallx_upload.pin_unlocked(user_id):

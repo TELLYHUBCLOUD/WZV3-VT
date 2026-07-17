@@ -2025,7 +2025,7 @@ async def _resolve_media_title(title, filename, year=None):
     mal_title = await _resolve_mal_title(title)
     if mal_title:
         return mal_title
-    return await _resolve_imdb_title(title, year)
+    return title
 
 
 async def extract_metadata_from_filename(filename, filepath=None):
@@ -2077,8 +2077,8 @@ async def extract_metadata_from_filename(filename, filepath=None):
         metadata["season"] = merge_range.group(1)
         metadata["start"] = merge_range.group(2).zfill(2)
         metadata["end"] = merge_range.group(3).zfill(2)
-        metadata["range"] = f"EP({metadata['start']}-{metadata['end']})"
-        metadata["episode"] = metadata["range"]
+        metadata["episode"] = f"{metadata['start']}-{metadata['end']}"
+        metadata["range"] = f"EP({metadata['episode']})"
 
     date_match = re.search(
         r"(?<!\d)((?:\d{2}|\d{4})[._-]\d{2}[._-]\d{2})(?!\d)",
@@ -2169,6 +2169,22 @@ async def extract_metadata_from_filename(filename, filepath=None):
             maxsplit=1,
         )[0]
         metadata["episode_name"] = re.sub(r"\s+", " ", after_date).strip(" -._")
+
+    if not metadata.get("episode_name"):
+        ep_name_match = re.search(
+            r"(?i)(?:S\d{1,2}\s*[._ -]*E\d{1,4}|Episode\s*[._ -]*\d{1,4}|Ep\s*[._ -]*\d{1,4}|E\d{1,4})[._ -]+(.+)",
+            clean_filename,
+        )
+        if ep_name_match:
+            ep_name = ep_name_match.group(1).replace("_", " ").replace(".", " ")
+            ep_name = re.split(
+                r"(?i)(?:\b(?:2160p|1080p|720p|480p|4k|WEB[-_. ]?DL|WEB[-_. ]?Rip|BluRay|HDRip|H\.?264|H\.?265|x264|x265|HEVC|AV1|AAC|DDP|EAC3|AC3|Multi|Dual|ESub|MSub)\b|\[[A-Fa-f0-9]{6,}\])",
+                ep_name,
+                maxsplit=1,
+            )[0]
+            ep_name = re.sub(r"[-\s]+", " ", ep_name).strip(" -._")
+            if ep_name and not re.fullmatch(r"[A-Fa-f0-9]{6,}", ep_name):
+                metadata["episode_name"] = ep_name
 
     if not episode_found:
         episode_patterns = [

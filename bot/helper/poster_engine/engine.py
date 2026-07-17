@@ -443,10 +443,8 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         provider = await _tmdb_search(title, base.get("year"))
     if not provider and not anime_hint:
         provider = await _anime_search(title)
-    if not provider:
-        provider = await _imdb_search(title, base.get("year"))
-    elif not anime_hint:
-        provider = _merge_missing(provider, await _imdb_search(title, base.get("year")))
+    if not provider and anime_hint:
+        provider = await _anime_search(title)
 
     tv_hint = bool(
         search(r"(?i)(?:\bS\d{1,2}\s*E\d{1,4}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)", seed)

@@ -212,7 +212,7 @@ def aria2_name(download_info):
         if file_path.startswith(dir_path):
             return Path(file_path[len(dir_path) + 1 :]).parts[0]
         else:
-            return ""
+            return Path(file_path).name
     else:
         return ""
 

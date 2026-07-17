@@ -3,6 +3,8 @@ from aiofiles import open as aiopen
 from base64 import b64encode
 from aiohttp.client_exceptions import ClientError
 from asyncio import TimeoutError
+from os import path as ospath
+from urllib.parse import unquote, urlparse
 
 from .... import task_dict_lock, task_dict, LOGGER
 from ....core.config_manager import Config
@@ -66,6 +68,11 @@ async def add_aria2_download(listener, dpath, header, ratio, seed_time):
         await remove(listener.link)
 
     name = aria2_name(download)
+    if not name:
+        parsed_name = unquote(ospath.basename(urlparse(listener.link).path or ""))
+        name = listener.name or parsed_name or gid
+        if not listener.name and parsed_name:
+            listener.name = parsed_name
     async with task_dict_lock:
         task_dict[listener.mid] = Aria2Status(listener, gid, queued=add_to_queue)
     if add_to_queue:

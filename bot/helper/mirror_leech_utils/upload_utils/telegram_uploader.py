@@ -753,14 +753,21 @@ class TelegramUploader:
                     LOGGER.info(f"Auto-thumbnail enabled for: {file}")
                     try:
                         as_doc = self._listener.as_doc
-                        custom_name = getattr(self._listener, "custom_name", "")
+                        custom_name = (
+                            getattr(self._listener, "custom_name", "")
+                            or getattr(self._listener, "name", "")
+                        )
+                        task_title_seed = (
+                            getattr(self._listener, "name", "")
+                            or getattr(self._listener, "file_details", {}).get("first_file", "")
+                        )
                         thumb_lookup_name = choose_media_title_seed(
                             file,
-                            first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
+                            first_file=task_title_seed,
                             file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
                             custom_name=custom_name,
                             link=getattr(self._listener, "source_url", ""),
-                            prefer_filename=True,
+                            prefer_filename=False,
                         )
                         force_anime_thumb = getattr(self._listener, "force_anime_thumbnail", False)
                         rename_regex = (

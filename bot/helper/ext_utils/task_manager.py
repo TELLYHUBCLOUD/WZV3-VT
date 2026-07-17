@@ -63,7 +63,7 @@ async def stop_duplicate_check(listener):
 async def check_running_tasks(listener, state="dl"):
     all_limit = safe_int(Config.QUEUE_ALL)
     max_parallel = get_max_parallel_tasks()
-    if max_parallel and (not all_limit or max_parallel < all_limit):
+    if all_limit and max_parallel and max_parallel < all_limit:
         all_limit = max_parallel
     state_limit = (
         safe_int(Config.QUEUE_DOWNLOAD)
@@ -131,7 +131,7 @@ async def start_from_queued():
 
     all_limit = safe_int(Config.QUEUE_ALL)
     max_parallel = get_max_parallel_tasks()
-    if max_parallel and (not all_limit or max_parallel < all_limit):
+    if all_limit and max_parallel and max_parallel < all_limit:
         all_limit = max_parallel
 
     if all_limit:

@@ -1595,8 +1595,11 @@ async def _extract_stream_rename_info(filepath):
 
 
 async def build_caption_metadata(filename, filepath=None, **extra):
-    metadata_seed = choose_media_title_seed(filename, **extra)
+    merge_metadata = _extract_merge_range_metadata(filename)
+    metadata_seed = filename if merge_metadata else choose_media_title_seed(filename, **extra)
     metadata = await extract_metadata_from_filename(metadata_seed, filepath)
+    if merge_metadata:
+        metadata.update(merge_metadata)
     metadata = {key: str(value or "") for key, value in metadata.items()}
     metadata.setdefault("filename", filename)
     metadata["filename"] = filename
@@ -1634,11 +1637,35 @@ async def build_caption_metadata(filename, filepath=None, **extra):
         )
 
     metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
+    if merge_metadata:
+        metadata.update(merge_metadata)
     if not metadata.get("languages") and metadata.get("language"):
         metadata["languages"] = metadata.get("language", "")
     if not metadata.get("language") and metadata.get("languages"):
         metadata["language"] = metadata.get("languages", "")
     return _SafeFormatDict(metadata)
+
+
+def _extract_merge_range_metadata(filename):
+    merge_range = re.search(
+        r"\[S0*(\d{1,2})-EP\(\s*(\d{1,4})\s*-\s*(\d{1,4})\s*\)\]",
+        str(filename or ""),
+        re.IGNORECASE,
+    )
+    if not merge_range:
+        return {}
+    start = merge_range.group(2).zfill(2)
+    end = merge_range.group(3).zfill(2)
+    episode = f"{start}-{end}"
+    return {
+        "season": merge_range.group(1),
+        "start": start,
+        "end": end,
+        "episode": episode,
+        "episodes": episode,
+        "range": f"EP({episode})",
+        "range_tag": f"[S{merge_range.group(1)}-EP({episode})]",
+    }
 
 
 async def _resolve_imdb_title(title, year=None):
@@ -2339,9 +2366,14 @@ async def apply_template_rename(filename, template, filepath=None, **extra):
     """
     if not template or "{" not in template:
         return filename
-    metadata_seed = choose_media_title_seed(filename, **extra)
+    merge_metadata = _extract_merge_range_metadata(filename)
+    metadata_seed = filename if merge_metadata else choose_media_title_seed(filename, **extra)
     metadata = await extract_metadata_from_filename(metadata_seed, filepath)
+    if merge_metadata:
+        metadata.update(merge_metadata)
     metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
+    if merge_metadata:
+        metadata.update(merge_metadata)
 
     def _apply_math_offset(tmpl, meta):
         def replacer(m):

@@ -510,9 +510,19 @@ def _batch_name(listener, batch):
     season = _season_text(meta.get("season"))
     start = _episode_text(first["meta"].get("episode"))
     end = _episode_text(last["meta"].get("episode"))
-    range_tag = f"[S{season}-EP({start}-{end})]"
+    episode_range = f"{start}-{end}"
+    range_tag = f"[S{season}-EP({episode_range})]"
     template = "{title} {resolution} {bit} {quality} {lib}"
-    meta.update({"start": start, "end": end, "range": range_tag})
+    meta.update(
+        {
+            "start": start,
+            "end": end,
+            "episode": episode_range,
+            "episodes": episode_range,
+            "range": f"EP({episode_range})",
+            "range_tag": range_tag,
+        }
+    )
     try:
         base = template.format_map({k: str(v or "") for k, v in meta.items()})
     except Exception:

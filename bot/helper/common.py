@@ -690,7 +690,7 @@ class TaskConfig:
             for dirpath, _, files in await sync_to_async(walk, dl_path, topdown=False):
                 for file_ in files:
                     f_path = ospath.join(dirpath, file_)
-                    if await is_supported_archive(f_path) and not file_.strip().lower().endswith(".rar"):
+                    if await is_supported_archive(f_path):
                         self.files_to_proceed.append(f_path)
 
         if not self.files_to_proceed:
@@ -707,7 +707,7 @@ class TaskConfig:
                 if self.is_cancelled:
                     return False
                 f_path = ospath.join(dirpath, file_)
-                if await is_supported_archive(f_path) and not file_.strip().lower().endswith(".rar"):
+                if await is_supported_archive(f_path):
                     self.proceed_count += 1
                     if self.is_file:
                         try:

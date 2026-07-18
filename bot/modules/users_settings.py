@@ -1753,10 +1753,11 @@ async def set_channel_metadata(_, message, rfunc):
     clean_channel = " ".join(channel.split())
     if clean_channel.startswith("https://t.me/"):
         clean_channel = "@" + clean_channel.rsplit("/", 1)[-1].strip()
-    brand = clean_channel
-    safe_brand = brand.lstrip("@") or brand
+    brand_display = clean_channel
+    brand = brand_display.replace("{", "{{").replace("}", "}}")
+    safe_brand = (brand_display.lstrip("@") or brand_display).replace("{", "{{").replace("}", "}}")
     global_metadata = {
-        "title": "{basename}",
+        "title": brand,
         "artist": brand,
         "album": brand,
         "album_artist": brand,
@@ -1766,24 +1767,24 @@ async def set_channel_metadata(_, message, rfunc):
         "copyright": brand,
         "comment": f"Encoded by {brand}",
         "encoder": "FFmpeg",
-        "description": "{basename}",
-        "synopsis": "{basename}",
+        "description": brand,
+        "synopsis": brand,
         "network": safe_brand,
     }
     video_metadata = {
-        "title": "{basename}",
+        "title": brand,
         "handler_name": brand,
         "comment": brand,
         "encoder": brand,
     }
     audio_metadata = {
-        "title": "{basename} - {audiolang}",
+        "title": f"{brand} - {{audiolang}}",
         "handler_name": brand,
         "comment": brand,
         "encoder": brand,
     }
     subtitle_metadata = {
-        "title": "{basename} - {sublang}",
+        "title": f"{brand} - {{sublang}}",
         "handler_name": brand,
         "comment": brand,
         "encoder": brand,
@@ -1795,7 +1796,7 @@ async def set_channel_metadata(_, message, rfunc):
     await delete_message(message)
     await send_message(
         message,
-        f"Metadata channel set to <code>{escape(brand)}</code> for global, video, audio, and subtitles.",
+        f"Metadata channel set to <code>{escape(brand_display)}</code> for global, video, audio, and subtitles.",
     )
     await rfunc()
     await database.update_user_data(user_id)

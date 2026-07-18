@@ -429,7 +429,10 @@ async def _imdb_search(title, year=None):
 
 
 async def _metadata(filename, filepath=None, user_dict=None, file_caption="", link=""):
-    seed = choose_media_title_seed(filename, file_caption=file_caption, link=link)
+    if search(r"\[S0*\d{1,2}-EP\(\s*\d{1,4}\s*-\s*\d{1,4}\s*\)\]", str(filename or ""), IGNORECASE):
+        seed = filename
+    else:
+        seed = choose_media_title_seed(filename, file_caption=file_caption, link=link)
     base = await extract_metadata_from_filename(seed, filepath)
     title = _clean_search_title(seed, base.get("title") or "")
     if not title or title.lower() == "unknown":
@@ -458,7 +461,10 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         "year": base.get("year", ""),
         "season": base.get("season", ""),
         "episode": base.get("episode", ""),
-        "episodes": base.get("episode", ""),
+        "episodes": base.get("episodes") or base.get("episode", ""),
+        "range": base.get("range", ""),
+        "start": base.get("start", ""),
+        "end": base.get("end", ""),
         "genres": "",
         "rating": "",
         "status": "",
@@ -471,6 +477,11 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         "bit": base.get("bit", ""),
         "codec": base.get("codec") or base.get("vcodec", ""),
         "audio": base.get("audio", ""),
+        "language": base.get("language", ""),
+        "languages": base.get("languages", ""),
+        "audio_codec": base.get("audio_codec", ""),
+        "audio_channels": base.get("audio_channels", ""),
+        "audio_bitrate": base.get("audio_bitrate", ""),
         "subtitles": "",
         "shortlang": "",
         "shortsub": base.get("shortsub", ""),
@@ -490,6 +501,27 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
     for key, value in caption_data.items():
         if not data.get(key):
             data[key] = value
+    for key in (
+        "language",
+        "languages",
+        "audio_codec",
+        "audio_channels",
+        "audio_bitrate",
+        "subtitles",
+        "shortlang",
+        "shortsub",
+        "range",
+        "start",
+        "end",
+    ):
+        if caption_data.get(key):
+            data[key] = caption_data[key]
+    if data.get("start") and data.get("end") and not data.get("range"):
+        data["range"] = f"EP({data['start']}-{data['end']})"
+    if data.get("range") and (
+        not data.get("episodes") or data.get("episodes") == data.get("episode")
+    ):
+        data["episodes"] = data["range"].removeprefix("EP(").removesuffix(")")
     return data
 
 

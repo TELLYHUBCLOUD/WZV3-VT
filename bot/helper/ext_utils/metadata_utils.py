@@ -4,6 +4,11 @@ from pycountry import languages
 from ..ext_utils.media_utils import get_streams
 
 
+class _MetadataSafeFormatDict(dict):
+    def __missing__(self, key):
+        return "{" + str(key) + "}"
+
+
 class MetadataProcessor:
     _year_pattern = re_compile(r"\b(19|20)\d{2}\b")
     _sanitize_pattern = re_compile(r'[<>:"/\\?*]')
@@ -100,12 +105,17 @@ class MetadataProcessor:
         if stream_lang and stream_lang != "unknown":
             key = "audiolang" if stream_type == "audio" else "sublang"
             vars_with_stream[key] = full_lang or self.convert_lang_code(stream_lang)
-        return {
-            self.sanitize(k): (
-                str(v).format(**vars_with_stream) if isinstance(v, str) else str(v)
-            )
-            for k, v in metadata_dict.items()
-        }
+        safe_vars = _MetadataSafeFormatDict(vars_with_stream)
+
+        def apply_value(value):
+            if not isinstance(value, str):
+                return str(value)
+            try:
+                return value.format_map(safe_vars)
+            except Exception:
+                return value
+
+        return {self.sanitize(k): apply_value(v) for k, v in metadata_dict.items()}
 
     def apply_vars(self, metadata_dict):
         return self.apply_vars_to_stream(metadata_dict)

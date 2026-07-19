@@ -10,7 +10,7 @@ from io import BytesIO
 from pyrogram.filters import create
 from pyrogram.handlers import MessageHandler
 from time import time
-from re import compile, I
+from re import compile, I, split as re_split
 
 from .. import scheduler, rss_dict, LOGGER
 from ..core.config_manager import Config
@@ -144,6 +144,31 @@ def _entry_url(entry):
 
 def _entry_title(entry):
     return str(entry.get("title") or "").strip()
+
+
+def _entry_text(entry):
+    parts = [
+        _entry_title(entry),
+        str(entry.get("summary") or ""),
+        str(entry.get("description") or ""),
+    ]
+    for tag in entry.get("tags") or []:
+        if isinstance(tag, dict):
+            parts.append(str(tag.get("term") or tag.get("label") or ""))
+        else:
+            parts.append(str(tag))
+    return " ".join(parts).lower()
+
+
+def _category_keywords(value):
+    return [
+        key
+        for key in (
+            part.strip().lower()
+            for part in re_split(r"[,|]", str(value or ""))
+        )
+        if key
+    ]
 
 
 async def _run_rss_download(handler, msg, auto_leech=False):
@@ -1000,11 +1025,17 @@ async def _tmv_monitor():
         return True
 
     if not rss_d.entries:
-        LOGGER.warning(f"TMV: no entries found for {site}")
+        content_type = res.headers.get("content-type", "unknown")
+        LOGGER.warning(
+            f"TMV: no entries found for {site}. "
+            f"Content-Type: {content_type}. "
+            "Set TMV_SITE to a RSS/API feed URL, not the normal website home page."
+        )
         return True
 
     latest_url = _entry_url(rss_d.entries[0])
-    category = str(getattr(Config, "TMV_CATEGORY", "tamil") or "").strip().lower()
+    category = str(getattr(Config, "TMV_CATEGORY", "tamil") or "").strip()
+    keywords = _category_keywords(category)
     last_link = str(getattr(Config, "TMV_LAST_LINK", "") or "")
     owner_id = (
         int(Config.OWNER_ID)
@@ -1019,7 +1050,7 @@ async def _tmv_monitor():
             continue
         if last_link and url == last_link:
             break
-        if category and category not in item_title.lower():
+        if keywords and not any(key in _entry_text(entry) for key in keywords):
             continue
         create_task(
             _start_rss_download(
@@ -1037,11 +1068,16 @@ async def _tmv_monitor():
         )
         started += 1
 
-    if latest_url and latest_url != last_link:
+    if started and latest_url and latest_url != last_link:
         Config.set("TMV_LAST_LINK", latest_url)
         await database.update_config({"TMV_LAST_LINK": latest_url})
     if started:
         LOGGER.info(f"TMV: queued {started} auto-leech item(s).")
+    else:
+        LOGGER.info(
+            f"TMV: no new matching items for category '{category or 'all'}'. "
+            "TMV_LAST_LINK was not changed."
+        )
     return True
 
 

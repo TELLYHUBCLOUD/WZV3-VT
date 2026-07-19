@@ -431,9 +431,11 @@ Title3 link -c cmd -d ratio:time -z password
 -inf For included words filter.
 -exf For excluded words filter.
 -stv true or false (sensitive filter)
--al true or false (owner/sudo RSS auto-leech into RSS_CHAT, one task at a time)
+-al true or false (owner/sudo RSS auto-leech into RSS_CHAT)
+-lb bot or user (RSS upload client; bot is default and does not need user session)
+-ar title, remove_dots, or none (RSS auto-leech filename source)
 
-Example: Title https://www.rss-url.com -inf 1080 or 720 or 144p|mkv or mp4|hevc -exf flv or web|xxx
+Example: Title https://www.rss-url.com -al true -lb bot -ar title -inf 1080 or 720 or 144p|mkv or mp4|hevc -exf flv or web|xxx
 This filter will parse links that its titles contain `(1080 or 720 or 144p) and (mkv or mp4) and hevc` and doesn't contain (flv or web) and xxx words. You can add whatever you want.
 
 Another example: -inf  1080  or 720p|.web. or .webrip.|hevc or x264. This will parse titles that contain ( 1080  or 720p) and (.web. or .webrip.) and (hevc or x264). I have added space before and after 1080 to avoid wrong matching. If this `10805695` number in title it will match 1080 if added 1080 without spaces after it.

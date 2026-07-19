@@ -17,6 +17,10 @@ from ... import (
     non_queued_dl,
     queued_up,
     queued_dl,
+    rss_non_queued_up,
+    rss_non_queued_dl,
+    rss_queued_up,
+    rss_queued_dl,
     queue_dict_lock,
     same_directory_lock,
     DOWNLOAD_DIR,
@@ -734,6 +738,8 @@ class TaskListener(TaskConfig):
             async with queue_dict_lock:
                 if self.mid in non_queued_up:
                     non_queued_up.remove(self.mid)
+                if self.mid in rss_non_queued_up:
+                    rss_non_queued_up.remove(self.mid)
             await start_from_queued()
             return
 
@@ -754,6 +760,8 @@ class TaskListener(TaskConfig):
         async with queue_dict_lock:
             if self.mid in non_queued_up:
                 non_queued_up.remove(self.mid)
+            if self.mid in rss_non_queued_up:
+                rss_non_queued_up.remove(self.mid)
 
         await start_from_queued()
         self._mark_bq_done("complete")
@@ -802,10 +810,20 @@ class TaskListener(TaskConfig):
             if self.mid in queued_up:
                 queued_up[self.mid].set()
                 del queued_up[self.mid]
+            if self.mid in rss_queued_dl:
+                rss_queued_dl[self.mid].set()
+                del rss_queued_dl[self.mid]
+            if self.mid in rss_queued_up:
+                rss_queued_up[self.mid].set()
+                del rss_queued_up[self.mid]
             if self.mid in non_queued_dl:
                 non_queued_dl.remove(self.mid)
             if self.mid in non_queued_up:
                 non_queued_up.remove(self.mid)
+            if self.mid in rss_non_queued_dl:
+                rss_non_queued_dl.remove(self.mid)
+            if self.mid in rss_non_queued_up:
+                rss_non_queued_up.remove(self.mid)
 
         await start_from_queued()
         await sleep(3)
@@ -842,10 +860,20 @@ class TaskListener(TaskConfig):
             if self.mid in queued_up:
                 queued_up[self.mid].set()
                 del queued_up[self.mid]
+            if self.mid in rss_queued_dl:
+                rss_queued_dl[self.mid].set()
+                del rss_queued_dl[self.mid]
+            if self.mid in rss_queued_up:
+                rss_queued_up[self.mid].set()
+                del rss_queued_up[self.mid]
             if self.mid in non_queued_dl:
                 non_queued_dl.remove(self.mid)
             if self.mid in non_queued_up:
                 non_queued_up.remove(self.mid)
+            if self.mid in rss_non_queued_dl:
+                rss_non_queued_dl.remove(self.mid)
+            if self.mid in rss_non_queued_up:
+                rss_non_queued_up.remove(self.mid)
 
         await start_from_queued()
         await sleep(3)

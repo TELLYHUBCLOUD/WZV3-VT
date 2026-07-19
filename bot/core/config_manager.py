@@ -241,7 +241,14 @@ class Config:
     RCLONE_SERVE_PORT = 8081
     RSS_CHAT = ""
     RSS_DELAY = 600
+    RSS_PARALLEL_DOWNLOADS = 8
+    RSS_PARALLEL_UPLOADS = 2
     RSS_SIZE_LIMIT = 0
+    TMV_AUTO_LEECH = False
+    TMV_CATEGORY = "tamil"
+    TMV_DUMP_CHAT = ""
+    TMV_LAST_LINK = ""
+    TMV_SITE = ""
     SEARCH_API_LINK = ""
     SEARCH_LIMIT = 0
     SEARCH_PLUGINS = []

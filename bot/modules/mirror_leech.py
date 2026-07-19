@@ -197,6 +197,12 @@ class Mirror(TaskListener):
         self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]
         self.user_trans = args["-ut"]
+        if self.rss_auto_leech:
+            rss_leech_by = str(
+                getattr(self.message, "_rss_leech_by", "bot") or "bot"
+            ).lower()
+            self.bot_trans = rss_leech_by != "user"
+            self.user_trans = rss_leech_by == "user"
         self.is_yt = args["-yt"]
         self.video_tool = args["-vt"]
         self.manual_video_merge = bool(bare_video_merge)

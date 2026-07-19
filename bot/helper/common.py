@@ -392,8 +392,17 @@ class TaskConfig:
                 ) != self.get_config_path(self.up_dest):
                     raise ValueError("You must use the same config to clone!")
         else:
-            self.leech_dest = self.up_dest or self.user_dict.get("LEECH_DUMP_CHAT")
-            self.up_dest = Config.LEECH_DUMP_CHAT
+            rss_dump_chat = (
+                getattr(self.message, "_rss_dump_chat", None) or Config.RSS_CHAT
+            )
+            if getattr(self, "rss_auto_leech", False) and rss_dump_chat:
+                self.leech_dest = self.up_dest or ""
+                self.up_dest = rss_dump_chat
+            else:
+                self.leech_dest = self.up_dest or self.user_dict.get(
+                    "LEECH_DUMP_CHAT"
+                )
+                self.up_dest = Config.LEECH_DUMP_CHAT
             self.hybrid_leech = TgClient.IS_PREMIUM_USER and (
                 self.user_dict.get("HYBRID_LEECH")
                 or Config.HYBRID_LEECH

@@ -9,6 +9,10 @@ from ... import (
     queue_dict_lock,
     queued_dl,
     queued_up,
+    rss_non_queued_dl,
+    rss_non_queued_up,
+    rss_queued_dl,
+    rss_queued_up,
     user_data,
 )
 from ...core.config_manager import Config
@@ -20,6 +24,26 @@ from .files_utils import get_base_name, check_storage_threshold
 from .links_utils import is_gdrive_id
 from .performance import get_max_parallel_tasks, resources_overloaded
 from .status_utils import get_readable_time, get_readable_file_size, get_specific_tasks
+
+
+def _start_rss_queued_locked(state="dl"):
+    queued = rss_queued_dl if state == "dl" else rss_queued_up
+    active = rss_non_queued_dl if state == "dl" else rss_non_queued_up
+    limit_attr = (
+        "RSS_PARALLEL_DOWNLOADS" if state == "dl" else "RSS_PARALLEL_UPLOADS"
+    )
+    default_limit = 8 if state == "dl" else 2
+    limit = max(
+        1,
+        safe_int(getattr(Config, limit_attr, default_limit), default_limit),
+    )
+    free_slots = max(0, limit - len(active))
+    if not free_slots:
+        return
+    for mid in list(queued.keys())[:free_slots]:
+        queued[mid].set()
+        del queued[mid]
+        active.add(mid)
 
 
 async def stop_duplicate_check(listener):
@@ -61,6 +85,33 @@ async def stop_duplicate_check(listener):
 
 
 async def check_running_tasks(listener, state="dl"):
+    if getattr(listener, "rss_auto_leech", False):
+        event = None
+        is_over_limit = False
+        async with queue_dict_lock:
+            if state == "up" and listener.mid in rss_non_queued_dl:
+                rss_non_queued_dl.remove(listener.mid)
+                _start_rss_queued_locked("dl")
+            active = rss_non_queued_dl if state == "dl" else rss_non_queued_up
+            queued = rss_queued_dl if state == "dl" else rss_queued_up
+            limit_attr = (
+                "RSS_PARALLEL_DOWNLOADS"
+                if state == "dl"
+                else "RSS_PARALLEL_UPLOADS"
+            )
+            default_limit = 8 if state == "dl" else 2
+            limit = max(
+                1,
+                safe_int(getattr(Config, limit_attr, default_limit), default_limit),
+            )
+            if len(active) >= limit:
+                is_over_limit = True
+                event = Event()
+                queued[listener.mid] = event
+            else:
+                active.add(listener.mid)
+        return is_over_limit, event
+
     all_limit = safe_int(Config.QUEUE_ALL)
     max_parallel = get_max_parallel_tasks()
     if all_limit and max_parallel and max_parallel < all_limit:
@@ -123,7 +174,15 @@ async def start_up_from_queued(mid: int):
     non_queued_up.add(mid)
 
 
+async def start_rss_from_queued():
+    async with queue_dict_lock:
+        _start_rss_queued_locked("up")
+        _start_rss_queued_locked("dl")
+
+
 async def start_from_queued():
+    await start_rss_from_queued()
+
     resource_busy, resource_reason = resources_overloaded()
     if resource_busy and (non_queued_dl or non_queued_up):
         LOGGER.warning(f"Keeping queued tasks paused; VPS safety guard active: {resource_reason}")

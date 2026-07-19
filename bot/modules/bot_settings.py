@@ -67,6 +67,8 @@ handler_dict = {}
 DEFAULT_VALUES = {
     "LEECH_SPLIT_SIZE": TgClient.MAX_SPLIT_SIZE,
     "RSS_DELAY": 600,
+    "RSS_PARALLEL_DOWNLOADS": 8,
+    "RSS_PARALLEL_UPLOADS": 2,
     "STATUS_UPDATE_INTERVAL": 15,
     "SEARCH_LIMIT": 0,
     "UPSTREAM_BRANCH": "master",
@@ -122,6 +124,11 @@ DEFAULT_VALUES = {
     "POST_BRAND_NAME": "Anime Starfall",
     "POST_LOGO": "",
     "SITES_LINKS": "",
+    "TMV_AUTO_LEECH": False,
+    "TMV_CATEGORY": "tamil",
+    "TMV_DUMP_CHAT": "",
+    "TMV_LAST_LINK": "",
+    "TMV_SITE": "",
     "POST_MOVIE_CAPTION": (
         "<b>「 {title} - {year} 」</b>\n"
         "━━━━━━━━━━━━━━━━━━\n"

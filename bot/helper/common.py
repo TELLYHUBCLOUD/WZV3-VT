@@ -398,6 +398,12 @@ class TaskConfig:
                 and rss_chat
                 and str(getattr(self.message.chat, "id", "")) == rss_chat
             )
+            is_chat_dump_task = (
+                self.is_leech
+                and self.up_dest
+                and self.is_super_chat
+                and not self.is_clone
+            )
             rss_dump_chat = (
                 getattr(self.message, "_rss_dump_chat", None)
                 or (Config.RSS_CHAT if is_rss_chat_task else None)
@@ -408,6 +414,13 @@ class TaskConfig:
             ) and rss_dump_chat:
                 self.leech_dest = self.up_dest or ""
                 self.up_dest = rss_dump_chat
+                self.bot_trans = True
+                self.user_trans = False
+            elif is_chat_dump_task:
+                self.leech_dest = self.up_dest
+                self.up_dest = f"{self.message.chat.id}"
+                if getattr(self.message, "topic_message", False):
+                    self.up_dest += f"|{self.message.message_thread_id}"
                 self.bot_trans = True
                 self.user_trans = False
             else:

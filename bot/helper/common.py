@@ -392,12 +392,24 @@ class TaskConfig:
                 ) != self.get_config_path(self.up_dest):
                     raise ValueError("You must use the same config to clone!")
         else:
-            rss_dump_chat = (
-                getattr(self.message, "_rss_dump_chat", None) or Config.RSS_CHAT
+            rss_chat = str(Config.RSS_CHAT or "").split("|", 1)[0]
+            is_rss_chat_task = (
+                self.is_leech
+                and rss_chat
+                and str(getattr(self.message.chat, "id", "")) == rss_chat
             )
-            if getattr(self, "rss_auto_leech", False) and rss_dump_chat:
+            rss_dump_chat = (
+                getattr(self.message, "_rss_dump_chat", None)
+                or (Config.RSS_CHAT if is_rss_chat_task else None)
+                or Config.RSS_CHAT
+            )
+            if (
+                getattr(self, "rss_auto_leech", False) or is_rss_chat_task
+            ) and rss_dump_chat:
                 self.leech_dest = self.up_dest or ""
                 self.up_dest = rss_dump_chat
+                self.bot_trans = True
+                self.user_trans = False
             else:
                 self.leech_dest = self.up_dest or self.user_dict.get(
                     "LEECH_DUMP_CHAT"

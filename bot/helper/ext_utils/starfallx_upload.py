@@ -59,8 +59,8 @@ def _pin_hash(user_id, pin):
     return sha256(f"{bot_seed}:{user_id}:{pin}".encode()).hexdigest()
 
 
-def parse_dump_chat():
-    dump = str(Config.LEECH_DUMP_CHAT or "").strip()
+def parse_dump_chat(dump_value=None):
+    dump = str(Config.LEECH_DUMP_CHAT if dump_value is None else dump_value or "").strip()
     if not dump:
         return None, None
     thread_id = None
@@ -804,7 +804,10 @@ class StarFallXUploadManager:
         )
 
     async def _try_acquire_locked(self, listener):
-        chat_id, thread_id = parse_dump_chat()
+        chat_id, thread_id = parse_dump_chat(
+            getattr(listener, "up_dest", None) or Config.LEECH_DUMP_CHAT
+        )
+        thread_id = getattr(listener, "chat_thread_id", None) or thread_id
         user_id = listener.user_id
         is_owner_task = is_sudo_user(user_id)
         user_records = self.get_user_token_records(user_id, listener.user_dict)

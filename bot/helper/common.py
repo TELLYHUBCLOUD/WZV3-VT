@@ -136,6 +136,7 @@ class TaskConfig:
         self.is_file = False
         self.bot_trans = False
         self.user_trans = False
+        self._relax_upload_chat_permissions = False
         self.progress = True
         self.ffmpeg_cmds = None
         self.metadata_title = None
@@ -416,6 +417,7 @@ class TaskConfig:
                 self.up_dest = rss_dump_chat
                 self.bot_trans = True
                 self.user_trans = False
+                self._relax_upload_chat_permissions = True
             elif is_chat_dump_task:
                 self.leech_dest = self.up_dest
                 self.up_dest = f"{self.message.chat.id}"
@@ -423,6 +425,7 @@ class TaskConfig:
                     self.up_dest += f"|{self.message.message_thread_id}"
                 self.bot_trans = True
                 self.user_trans = False
+                self._relax_upload_chat_permissions = True
             else:
                 self.leech_dest = self.up_dest or self.user_dict.get(
                     "LEECH_DUMP_CHAT"
@@ -509,9 +512,19 @@ class TaskConfig:
                             "FORUM",
                         ]:
                             member = await chat.get_member(uploader_id)
+                            privileges = member.privileges
+                            can_manage = bool(
+                                getattr(privileges, "can_manage_chat", False)
+                            )
+                            can_delete = bool(
+                                getattr(privileges, "can_delete_messages", False)
+                            )
                             if (
-                                not member.privileges.can_manage_chat
-                                or not member.privileges.can_delete_messages
+                                not can_manage
+                                or (
+                                    not can_delete
+                                    and not self._relax_upload_chat_permissions
+                                )
                             ):
                                 if not self.user_transmission:
                                     raise ValueError(

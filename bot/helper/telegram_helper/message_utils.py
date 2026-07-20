@@ -40,9 +40,32 @@ from ..ext_utils.status_utils import get_readable_message
 from .button_build import ButtonMaker
 
 
+def _parse_chat_target(target):
+    if not isinstance(target, str):
+        return None
+    target = target.strip()
+    if not target:
+        return None
+    thread_id = None
+    if "|" in target:
+        target, thread = target.split("|", 1)
+        thread = thread.strip()
+        if thread.lstrip("-").isdigit():
+            thread_id = int(thread)
+    target = target.strip()
+    if target.lstrip("-").isdigit():
+        return int(target), thread_id
+    return None
+
+
 async def send_message(message, text, buttons=None, block=True, photo=None, **kwargs):
     text = _fit_telegram_text(text)
     try:
+        parsed_target = _parse_chat_target(message)
+        if parsed_target:
+            message, parsed_thread_id = parsed_target
+            if parsed_thread_id is not None:
+                kwargs.setdefault("message_thread_id", parsed_thread_id)
         if photo:
             if photo == "IMAGES":
                 photo = choice(Config.IMAGES) if Config.IMAGES else None
@@ -72,7 +95,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 if not block:
                     return str(f)
                 await sleep(f.value * 1.2)
-                return await send_message(message, text, buttons, block, photo)
+                return await send_message(message, text, buttons, block, photo, **kwargs)
             except MediaCaptionTooLong:
                 return await send_message(
                     message,
@@ -94,6 +117,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 disable_web_page_preview=True,
                 disable_notification=True,
                 reply_markup=buttons,
+                **kwargs,
             )
         if not hasattr(message, "reply"):
             LOGGER.warning(f"send_message got invalid target: {type(message).__name__}")

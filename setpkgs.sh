@@ -69,8 +69,8 @@ if pgrep -x "$ARIA2C" >/dev/null 2>&1; then
 fi
 
 tracker_list=""
-if tracker_list=$(curl -fsSL --max-time 20 https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_all.txt | awk 'NF' | paste -sd, -); then
-    log "Loaded public tracker list for aria2."
+if tracker_list=$(curl -fsSL --max-time 20 https://ngosang.github.io/trackerslist/trackers_all_http.txt | awk 'NF' | paste -sd, -); then
+    log "Loaded HTTP-only public tracker list for aria2."
 else
     log "Tracker list download failed; starting aria2 without extra trackers."
     tracker_list=""

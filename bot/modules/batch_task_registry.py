@@ -1,4 +1,5 @@
 from contextlib import suppress
+from inspect import isawaitable
 import json
 from os import path as ospath
 from secrets import token_hex
@@ -44,15 +45,24 @@ class BatchTaskController:
         self.cancelled = False
         self.cancel_reason = ""
         self.listeners = set()
+        self.cancel_callbacks = set()
         _batch_controllers[self.gid] = self
 
     def register(self, listener):
         self.listeners.add(listener)
         listener.batch_controller_gid = self.gid
 
+    def register_cancel_callback(self, callback):
+        self.cancel_callbacks.add(callback)
+
     async def cancel(self, reason="cancelled"):
         self.cancelled = True
         self.cancel_reason = reason
+        for callback in list(self.cancel_callbacks):
+            with suppress(Exception):
+                result = callback(reason)
+                if isawaitable(result):
+                    await result
         for listener in list(self.listeners):
             listener.is_cancelled = True
             with suppress(Exception):

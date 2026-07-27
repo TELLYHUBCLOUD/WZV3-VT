@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from json import loads
 from os import path as ospath
 from re import search
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from httpx import AsyncClient, HTTPError, Response
 from lxml import etree, html
@@ -68,8 +68,24 @@ class HstreamEpisode:
     sample_urls: list[str]
 
 
+def _image_url(value):
+    if isinstance(value, dict):
+        for key in ("url", "src", "poster", "image"):
+            if result := _image_url(value.get(key)):
+                return result
+        return ""
+    if isinstance(value, (list, tuple)):
+        return next((result for item in value if (result := _image_url(item))), "")
+    return str(value or "").strip()
+
+
 def _absolute(url):
-    return urljoin(f"{HSTREAM_BASE}/", str(url or "").strip()) if url else ""
+    value = _image_url(url)
+    if not value or value.startswith(("data:", "blob:", "javascript:")):
+        return ""
+    absolute = urljoin(f"{HSTREAM_BASE}/", value)
+    parsed = urlparse(absolute)
+    return absolute if parsed.scheme in {"http", "https"} and parsed.netloc else ""
 
 
 def _number(value):
@@ -385,12 +401,18 @@ class HstreamResolver:
         player.raise_for_status()
         payload = player.json()
 
-        portrait = document.xpath(
-            "string((//img[contains(@src, 'cover-ep')]/@src)[1])"
-        ).strip()
+        portrait = ""
+        for attribute in ("data-src", "data-lazy-src", "src"):
+            candidates = document.xpath(
+                f"//img[contains(@{attribute}, 'cover-ep')]/@{attribute}"
+            )
+            portrait = next(
+                (candidate for candidate in candidates if _absolute(candidate)),
+                "",
+            )
+            if portrait:
+                break
         landscape = json_ld.get("thumbnailUrl") or payload.get("poster") or ""
-        if isinstance(landscape, list):
-            landscape = next((value for value in landscape if value), "")
         upload_date = str(json_ld.get("uploadDate") or "")
         genres = json_ld.get("genre") or []
         if isinstance(genres, str):

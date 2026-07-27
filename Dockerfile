@@ -79,6 +79,9 @@ RUN uv pip install --python /wzvenv/bin/python --no-cache -r requirements.txt \
     && rm -rf /var/lib/apt/lists/* /root/.cache
 
 COPY --from=nllb-builder /opt/models/nllb-200-distilled-600M-int8 /opt/models/nllb-200-distilled-600M-int8
+RUN test -s /opt/models/nllb-200-distilled-600M-int8/model.bin \
+    && test -s /opt/models/nllb-200-distilled-600M-int8/config.json \
+    && test -s /opt/models/nllb-200-distilled-600M-int8/tokenizer_config.json
 
 COPY . .
 RUN chmod +x start.sh setpkgs.sh

@@ -128,7 +128,10 @@ class HstreamTranslator:
 
     async def start(self, cancel_event=None):
         if not Path(self.model_dir).is_dir():
-            raise RuntimeError(f"NLLB model is missing: {self.model_dir}")
+            raise RuntimeError(
+                f"NLLB model is missing: {self.model_dir}. Rebuild the Docker app "
+                "image after pulling the latest branch"
+            )
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             self.port = sock.getsockname()[1]

@@ -237,6 +237,10 @@ def _meta_line(data):
 async def _download_image(url):
     if not url:
         return None
+    url = str(url).strip()
+    if not url.startswith(("http://", "https://")):
+        LOGGER.warning(f"Poster image URL is not HTTP(S); ignoring: {url[:80]}")
+        return None
     try:
         async with AsyncClient(timeout=15, follow_redirects=True) as client:
             res = await client.get(url)

@@ -13,6 +13,7 @@ from ... import LOGGER, DOWNLOAD_DIR
 from ...core.config_manager import BinConfig, Config
 from ..ext_utils.bot_utils import cmd_exec, sync_to_async
 from ..ext_utils.ffmpeg_queue import ffmpeg_task
+from ..ext_utils.files_utils import get_source_container_name
 from ..ext_utils.links_utils import is_url
 from ..ext_utils.performance import get_ffmpeg_cores, get_ffmpeg_threads
 from ..telegram_helper.message_utils import send_message
@@ -772,7 +773,13 @@ async def _merge_video_directory(listener, root, videos):
         return root
 
     list_path = ospath.join(root, f"video_merge_{listener.mid}.ffconcat")
-    output = ospath.join(root, "Video_Merge.mkv")
+    source_name = get_source_container_name(
+        getattr(listener, "merge_source_name", "")
+    )
+    output_name = f"{source_name or 'Video_Merge'}.mkv"
+    output = ospath.join(root, output_name)
+    if output in videos:
+        output = ospath.join(root, f"{source_name or 'Video_Merge'} Merged.mkv")
     if await aiopath.exists(output):
         await remove(output)
     async with aiopen(list_path, "w", encoding="utf-8") as f:
@@ -819,7 +826,7 @@ async def _merge_video_directory(listener, root, videos):
         with suppress(Exception):
             total_duration += (await get_media_info(video))[0]
     ffmpeg._total_time = total_duration
-    listener.subname = "Video_Merge.mkv"
+    listener.subname = ospath.basename(output)
     listener.subsize = sum([await get_path_size(path) for path in videos])
     listener.progress = True
     async with task_dict_lock:

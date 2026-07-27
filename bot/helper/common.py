@@ -90,6 +90,7 @@ class TaskConfig:
         self.rc_flags = ""
         self.tag = ""
         self.name = ""
+        self.merge_source_name = ""
         self.subname = ""
         self.name_swap = ""
         self.thumbnail_layout = ""

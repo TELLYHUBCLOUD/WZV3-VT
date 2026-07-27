@@ -309,6 +309,26 @@ def get_base_name(orig_path):
         raise NotSupportedExtractionArchive("File format not supported for extraction")
 
 
+def get_source_container_name(name):
+    value = ospath.basename(str(name or "").rstrip("/\\")).strip()
+    if not value:
+        return ""
+    value = re_sub(r"\.\!qB$", "", value, flags=I)
+    value = re_sub(
+        r"\.(?:zip|7z)\.\d+$",
+        lambda match: match[0].rsplit(".", 1)[0],
+        value,
+        flags=I,
+    )
+    value = re_sub(r"\.part\d+\.rar$", ".rar", value, flags=I)
+    value = re_sub(r"\.r\d+$", "", value, flags=I)
+    for extension in sorted(ARCH_EXT, key=len, reverse=True):
+        if value.lower().endswith(extension):
+            value = value[: -len(extension)]
+            break
+    return re_sub(r'[\\/:*?"<>|]+', " ", value).strip(" .-")
+
+
 async def create_recursive_symlink(source, destination):
     if ospath.isdir(source):
         await aiomakedirs(destination, exist_ok=True)

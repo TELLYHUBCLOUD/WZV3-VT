@@ -12,7 +12,12 @@ from ...core.config_manager import BinConfig, Config
 from ...core.tg_client import TgClient
 from ..ext_utils.bot_utils import cmd_exec, sync_to_async
 from ..ext_utils.ffmpeg_queue import ffmpeg_task
-from ..ext_utils.files_utils import get_path_size, is_archive, is_supported_archive
+from ..ext_utils.files_utils import (
+    get_path_size,
+    get_source_container_name,
+    is_archive,
+    is_supported_archive,
+)
 from ..ext_utils.media_utils import extract_metadata_from_filename
 from ..telegram_helper.message_utils import edit_message, send_file, send_message
 from .video_tools import (
@@ -523,6 +528,12 @@ def _batch_name(listener, batch):
             "range_tag": range_tag,
         }
     )
+    source_name = get_source_container_name(
+        getattr(listener, "merge_source_name", "")
+    )
+    if source_name:
+        meta["title"] = source_name
+        meta["name"] = source_name
     try:
         base = template.format_map({k: str(v or "") for k, v in meta.items()})
     except Exception:

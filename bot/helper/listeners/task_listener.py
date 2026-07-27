@@ -218,6 +218,8 @@ class TaskListener(TaskConfig):
                 return
             download = task_dict[self.mid]
             self.name = download.name()
+            if not self.merge_source_name:
+                self.merge_source_name = self.name
             gid = download.gid()
         LOGGER.info(f"Download completed: {self.name}")
 

@@ -1,8 +1,11 @@
 FROM python:3.12-slim-bookworm AS nllb-builder
 
 RUN python -m pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        "torch==2.12.1" \
+    && python -m pip install --no-cache-dir \
         "ctranslate2==4.8.1" \
-        "transformers[torch]<5" \
+        "transformers<5" \
         sentencepiece \
     && ct2-transformers-converter \
         --model facebook/nllb-200-distilled-600M \

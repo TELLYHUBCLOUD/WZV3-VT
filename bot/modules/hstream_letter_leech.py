@@ -13,6 +13,7 @@ from asyncio import (
 from asyncio.subprocess import PIPE
 from contextlib import suppress
 from html import escape
+from json import loads
 from os import path as ospath
 from pathlib import Path
 from re import sub
@@ -20,13 +21,13 @@ from shutil import rmtree
 from sys import executable
 
 from httpx import AsyncClient
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 from pyrogram.errors import FloodWait
 
 from .. import DOWNLOAD_DIR, LOGGER, user_data
 from ..core.config_manager import Config
 from ..core.tg_client import TgClient
-from ..helper.ext_utils.bot_utils import sync_to_async
+from ..helper.ext_utils.bot_utils import cmd_exec, sync_to_async
 from ..helper.ext_utils.hstream_resolver import HstreamResolver
 from ..helper.ext_utils.media_utils import get_video_thumbnail
 from ..helper.poster_engine.engine import POSTER_TEMPLATE_COUNT, render_poster_option
@@ -77,11 +78,9 @@ def _fps_label(value):
         fps = float(value or 0)
     except (TypeError, ValueError):
         return ""
-    if fps <= 0:
+    if not 40 <= fps <= 50.5:
         return ""
-    if abs(fps - round(fps)) < 0.01:
-        return f"{round(fps)}fps"
-    return f"{fps:.3f}".rstrip("0").rstrip(".") + "fps"
+    return "48fps"
 
 
 def _video_filename(episode, stream):
@@ -89,7 +88,7 @@ def _video_filename(episode, stream):
     fps = _fps_label(stream.fps)
     media_details = " ".join(
         value
-        for value in (stream.resolution, stream.bit, stream.codec, fps)
+        for value in (stream.resolution, stream.codec, fps)
         if value
     )
     return _safe_filename(
@@ -111,25 +110,34 @@ def _quality_summary(streams):
     return values("resolution"), values("bit"), values("codec")
 
 
+def _genre_hashtags(genres):
+    tags = []
+    for genre in genres:
+        tag = sub(r"[^a-z0-9]+", "_", str(genre).strip().lower()).strip("_")
+        if tag and tag not in tags:
+            tags.append(tag)
+    return " ".join(f"#{tag}" for tag in tags) or "#anime"
+
+
 def _poster_caption(episode):
     resolution, bit, codec = _quality_summary(episode.streams)
     title = escape(episode.title, quote=False)
     year = escape(episode.year, quote=False)
     views = f"{episode.views:,}" if episode.views else "N/A"
-    genres = escape(", ".join(episode.genres) or "N/A", quote=False)
+    genres = _genre_hashtags(episode.genres)
     description = escape(episode.description or "N/A", quote=False)
     fixed = (
-        f"<b>「 {title}{f' - {year}' if year else ''} 」</b>\n"
+        f"<b>「 {title}{f' - {year}' if year else ''} 」\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "╔════◇═══════════◇════\n"
         f"║ {views} Views\n"
         f"║ {escape(resolution)} {escape(bit)} {escape(codec)}\n"
         "║ Japanese ~ ESub\n"
         "╚════◇═══════════◇════\n\n"
-        f"Genres : {genres}\n\n"
-        "<blockquote expandable>Synopsis :\n"
+        f"Genres : {genres}</b>\n\n"
+        "<blockquote expandable><b>Synopsis :\n"
     )
-    suffix = "</blockquote>\n\nDropped By ➤ [@Anime_Starfall🥰]"
+    suffix = "</b></blockquote>\n\n<b>Dropped By ➤ [@Anime_Starfall🥰]</b>"
     allowance = max(0, 1024 - len(fixed) - len(suffix) - 3)
     if len(description) > allowance:
         description = description[:allowance].rsplit(" ", 1)[0] + "..."
@@ -155,10 +163,191 @@ def _save_image(content, path, thumbnail):
 
     image = Image.open(BytesIO(content)).convert("RGB")
     if thumbnail:
-        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
-        image.save(path, "JPEG", quality=84, optimize=True)
+        image = ImageOps.fit(image, (320, 180), Image.Resampling.LANCZOS)
+        image = image.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=2))
+        image.save(path, "JPEG", quality=94, optimize=True, subsampling=0)
     else:
-        image.save(path, "JPEG", quality=92, optimize=True)
+        image = ImageOps.fit(image, (1280, 720), Image.Resampling.LANCZOS)
+        image.save(path, "JPEG", quality=94, optimize=True, subsampling=0)
+
+
+async def _download_subtitles(episode, directory):
+    tracks = []
+    if not episode.subtitles:
+        return tracks
+    async with AsyncClient(
+        follow_redirects=True,
+        timeout=30,
+        verify=False,
+        headers={"Referer": episode.source_url},
+    ) as client:
+        for index, subtitle in enumerate(episode.subtitles, start=1):
+            try:
+                response = await client.get(subtitle.url)
+                response.raise_for_status()
+                extension = ospath.splitext(subtitle.url.split("?", 1)[0])[1].lower()
+                if extension not in {".ass", ".ssa", ".srt", ".vtt"}:
+                    extension = ".ass"
+                subtitle_path = ospath.join(directory, f"subtitle_{index}{extension}")
+                Path(subtitle_path).write_bytes(response.content)
+                tracks.append((subtitle.language, subtitle_path))
+            except Exception as error:
+                LOGGER.warning(f"Hstream subtitle download failed: {error}")
+    return tracks
+
+
+async def _download_sample_images(episode, directory):
+    if not episode.sample_urls:
+        return []
+    sample_dir = ospath.join(directory, "samples")
+    Path(sample_dir).mkdir(parents=True, exist_ok=True)
+    slots = Semaphore(6)
+
+    async with AsyncClient(
+        follow_redirects=True,
+        timeout=45,
+        verify=False,
+        headers={"Referer": episode.source_url},
+    ) as client:
+
+        async def download(index, url):
+            async with slots:
+                try:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    target = ospath.join(sample_dir, f"{index:03d}.jpg")
+                    await sync_to_async(_save_sample_image, response.content, target)
+                    return target
+                except Exception as error:
+                    LOGGER.warning(f"Hstream sample image failed for {url}: {error}")
+                    return ""
+
+        results = await gather(
+            *(download(index, url) for index, url in enumerate(episode.sample_urls)),
+        )
+    return [path for path in results if path]
+
+
+def _save_sample_image(content, target):
+    from io import BytesIO
+
+    with Image.open(BytesIO(content)) as image:
+        image.convert("RGB").save(
+            target,
+            "JPEG",
+            quality=92,
+            optimize=True,
+            subsampling=0,
+        )
+
+
+def _create_sample_collage(sample_paths, target):
+    valid = []
+    for sample_path in sample_paths:
+        try:
+            with Image.open(sample_path) as image:
+                image.verify()
+            valid.append(sample_path)
+        except (OSError, ValueError):
+            continue
+    if not valid:
+        return ""
+
+    count = len(valid)
+    if count <= 4:
+        row_counts = [count]
+    else:
+        full_rows, remainder = divmod(count, 4)
+        row_counts = [4] * full_rows
+        if remainder == 1 and full_rows:
+            row_counts[-1:] = [3, 2]
+        elif remainder == 2 and full_rows:
+            row_counts[-1:] = [3, 3]
+        elif remainder:
+            row_counts.append(remainder)
+    row_heights = [round((1280 / columns) * 9 / 16) for columns in row_counts]
+    canvas = Image.new("RGB", (1280, sum(row_heights)), "black")
+    sample_index = 0
+    top = 0
+    for columns, row_height in zip(row_counts, row_heights, strict=True):
+        tile_width = 1280 // columns
+        for column in range(columns):
+            sample_path = valid[sample_index]
+            with Image.open(sample_path) as image:
+                tile = ImageOps.fit(
+                    image.convert("RGB"),
+                    (tile_width, row_height),
+                    Image.Resampling.LANCZOS,
+                )
+                canvas.paste(tile, (column * tile_width, top))
+            sample_index += 1
+        top += row_height
+    canvas.save(target, "JPEG", quality=91, optimize=True, subsampling=0)
+    return target
+
+
+async def _video_info(video_path):
+    result = await cmd_exec(
+        [
+            "ffprobe",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            video_path,
+        ]
+    )
+    if result[2] != 0 or not result[0]:
+        return {"duration": 0, "width": 0, "height": 0}
+    try:
+        payload = loads(result[0])
+        video = next(
+            (
+                stream
+                for stream in payload.get("streams", [])
+                if stream.get("codec_type") == "video"
+            ),
+            {},
+        )
+        duration = round(float(payload.get("format", {}).get("duration") or 0))
+        return {
+            "duration": duration,
+            "width": int(video.get("width") or 0),
+            "height": int(video.get("height") or 0),
+        }
+    except (TypeError, ValueError):
+        return {"duration": 0, "width": 0, "height": 0}
+
+
+def _ass_time(seconds):
+    seconds = max(0, float(seconds))
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    remaining = seconds % 60
+    return f"{hours}:{minutes:02}:{remaining:05.2f}"
+
+
+def _write_brand_subtitle(path, duration):
+    end = _ass_time(max(duration, 1) + 1)
+    text = "Join our Telegram channel [@Anime_Starfall🥰]"
+    content = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Starfall,Arial,54,&H00FFFFFF,&H00FF9E2D,1,3,1,2,40,40,70,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,{end},Starfall,,0,0,0,,{{\\b1}}{text}
+"""
+    Path(path).write_text(content, encoding="utf-8")
+    return path
 
 
 async def _stop_process(process):
@@ -245,22 +434,70 @@ async def _run_ytdlp(url, output_dir, source_url, cancel_event, processes):
     return str(max(files, key=lambda item: item.stat().st_size))
 
 
-async def _remux_to_mkv(source, target, cancel_event, processes):
-    if ospath.splitext(source)[1].lower() == ".mkv":
-        await sync_to_async(Path(source).replace, target)
-        return target
-    process = await create_subprocess_exec(
+async def _remux_to_mkv(
+    source,
+    target,
+    episode,
+    subtitle_tracks,
+    cancel_event,
+    processes,
+):
+    info = await _video_info(source)
+    brand_path = ospath.join(ospath.dirname(target), "starfall_brand.ass")
+    await sync_to_async(_write_brand_subtitle, brand_path, info["duration"])
+    inputs = [brand_path]
+    inputs.extend(path for _, path in subtitle_tracks if ospath.isfile(path))
+    command = [
         "ffmpeg",
         "-hide_banner",
         "-loglevel",
         "error",
+        "-y",
         "-i",
         source,
-        "-map",
-        "0",
-        "-c",
-        "copy",
-        target,
+    ]
+    for subtitle_path in inputs:
+        command.extend(("-i", subtitle_path))
+    command.extend(("-map", "0:v", "-map", "0:a?"))
+    for input_index in range(1, len(inputs) + 1):
+        command.extend(("-map", f"{input_index}:0"))
+    metadata = {
+        "title": episode.title,
+        "artist": "@Anime_Starfall🥰",
+        "album": "@Anime_Starfall🥰",
+        "album_artist": "@Anime_Starfall🥰",
+        "composer": "@Anime_Starfall🥰",
+        "publisher": "@Anime_Starfall🥰",
+        "copyright": "@Anime_Starfall🥰",
+        "comment": "Encoded by @Anime_Starfall🥰",
+        "description": episode.description or episode.title,
+        "synopsis": episode.description or episode.title,
+    }
+    command.extend(("-c", "copy", "-c:s", "ass", "-metadata:s:a", "language=jpn"))
+    for key, value in metadata.items():
+        command.extend(("-metadata", f"{key}={value}"))
+    command.extend(
+        (
+            "-metadata:s:s:0",
+            "language=eng",
+            "-metadata:s:s:0",
+            "title=Anime Starfall",
+            "-disposition:s:0",
+            "default",
+        )
+    )
+    for index, (language, _) in enumerate(subtitle_tracks, start=1):
+        command.extend(
+            (
+                f"-metadata:s:s:{index}",
+                f"language={language or 'und'}",
+                f"-metadata:s:s:{index}",
+                "title=English Subtitles" if language == "eng" else "title=Subtitles",
+            )
+        )
+    command.append(target)
+    process = await create_subprocess_exec(
+        *command,
         stdout=PIPE,
         stderr=PIPE,
     )
@@ -285,10 +522,19 @@ async def _remux_to_mkv(source, target, cancel_event, processes):
             await cancelled
     with suppress(OSError):
         Path(source).unlink()
+    with suppress(OSError):
+        Path(brand_path).unlink()
     return target
 
 
-async def _download_quality(episode, stream, directory, cancel_event, processes):
+async def _download_quality(
+    episode,
+    stream,
+    subtitle_tracks,
+    directory,
+    cancel_event,
+    processes,
+):
     async with _DOWNLOAD_SLOTS:
         if cancel_event.is_set():
             return None
@@ -302,7 +548,12 @@ async def _download_quality(episode, stream, directory, cancel_event, processes)
                 )
                 target = ospath.join(quality_dir, _video_filename(episode, stream))
                 return await _remux_to_mkv(
-                    source, target, cancel_event, processes
+                    source,
+                    target,
+                    episode,
+                    subtitle_tracks,
+                    cancel_event,
+                    processes,
                 )
             except Exception as current:
                 error = current
@@ -327,11 +578,24 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
         return None
     directory = ospath.join(root, f"{index:05d}")
     Path(directory).mkdir(parents=True, exist_ok=True)
-    thumb = await _download_image(
+    cover = await _download_image(
         episode.landscape_url,
-        ospath.join(directory, "video_thumb.jpg"),
-        thumbnail=True,
+        ospath.join(directory, "video_cover.jpg"),
     )
+    thumb = ""
+    if cover:
+        thumb = ospath.join(directory, "video_thumb.jpg")
+        await sync_to_async(_copy_thumbnail, cover, thumb)
+    subtitle_tracks = await _download_subtitles(episode, directory)
+    sample_paths = await _download_sample_images(episode, directory)
+    sample_collage = ""
+    if sample_paths:
+        sample_collage = ospath.join(directory, "sample_collage.jpg")
+        sample_collage = await sync_to_async(
+            _create_sample_collage,
+            sample_paths,
+            sample_collage,
+        )
     resolution, bit, codec = _quality_summary(episode.streams)
     poster_metadata = {
         "title": episode.title,
@@ -373,7 +637,12 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
     results = await gather(
         *(
             _download_quality(
-                episode, stream, directory, cancel_event, processes
+                episode,
+                stream,
+                subtitle_tracks,
+                directory,
+                cancel_event,
+                processes,
             )
             for stream in episode.streams
         ),
@@ -393,8 +662,10 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
     if not thumb and videos:
         frame = await get_video_thumbnail(videos[0][1], 0)
         if frame and ospath.isfile(frame):
+            cover = ospath.join(directory, "video_cover.jpg")
             thumb = ospath.join(directory, "video_thumb.jpg")
-            await sync_to_async(_copy_thumbnail, frame, thumb)
+            await sync_to_async(_copy_cover, frame, cover)
+            await sync_to_async(_copy_thumbnail, cover, thumb)
             with suppress(OSError):
                 Path(frame).unlink()
     return {
@@ -402,7 +673,9 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
         "poster": poster,
         "caption": _poster_caption(episode),
         "thumb": thumb,
+        "cover": cover,
         "videos": videos,
+        "sample_collage": sample_collage,
         "directory": directory,
     }
 
@@ -410,8 +683,19 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
 def _copy_thumbnail(source, target):
     with Image.open(source) as image:
         image = image.convert("RGB")
-        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
-        image.save(target, "JPEG", quality=84, optimize=True)
+        image = ImageOps.fit(image, (320, 180), Image.Resampling.LANCZOS)
+        image = image.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=2))
+        image.save(target, "JPEG", quality=94, optimize=True, subsampling=0)
+
+
+def _copy_cover(source, target):
+    with Image.open(source) as image:
+        image = ImageOps.fit(
+            image.convert("RGB"),
+            (1280, 720),
+            Image.Resampling.LANCZOS,
+        )
+        image.save(target, "JPEG", quality=94, optimize=True, subsampling=0)
 
 
 async def _telegram_call(method, **kwargs):
@@ -450,26 +734,56 @@ async def _upload_episode(prepared, destination, thread_id, cancel_event):
             **kwargs,
         )
     uploaded = 0
-    for _, path in prepared["videos"]:
+    for stream, path in prepared["videos"]:
         if cancel_event.is_set():
             break
+        info = await _video_info(path)
+        height = info["height"] or int(stream.resolution.rstrip("p") or 0)
+        width = info["width"] or round(height * 16 / 9)
         media = {
             **kwargs,
             "video": path,
-            "caption": f"<code>{escape(ospath.basename(path), quote=False)}</code>",
+            "caption": f"<b>{escape(ospath.basename(path), quote=False)}</b>",
+            "duration": info["duration"],
+            "width": width,
+            "height": height,
             "supports_streaming": True,
         }
         if prepared["thumb"] and ospath.isfile(prepared["thumb"]):
             media["thumb"] = prepared["thumb"]
+        if prepared["cover"] and ospath.isfile(prepared["cover"]):
+            media["cover"] = prepared["cover"]
         try:
             await _telegram_call(TgClient.bot.send_video, **media)
         except Exception as error:
             LOGGER.warning(f"Hstream send_video failed, using document: {error}")
             media.pop("video")
             media.pop("supports_streaming", None)
+            media.pop("duration", None)
+            media.pop("width", None)
+            media.pop("height", None)
+            media.pop("cover", None)
             media["document"] = path
             await _telegram_call(TgClient.bot.send_document, **media)
         uploaded += 1
+    sample_collage = prepared.get("sample_collage")
+    if (
+        not cancel_event.is_set()
+        and sample_collage
+        and ospath.isfile(sample_collage)
+    ):
+        try:
+            await _telegram_call(
+                TgClient.bot.send_photo,
+                photo=sample_collage,
+                caption=(
+                    "<b>Sample Images</b>\n"
+                    f"<b>{escape(prepared['episode'].title, quote=False)}</b>"
+                ),
+                **kwargs,
+            )
+        except Exception as error:
+            LOGGER.warning(f"Hstream sample collage upload failed: {error}")
     return uploaded
 
 

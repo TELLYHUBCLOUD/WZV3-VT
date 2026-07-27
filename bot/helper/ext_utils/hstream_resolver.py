@@ -44,6 +44,12 @@ class HstreamStream:
 
 
 @dataclass(slots=True)
+class HstreamSubtitle:
+    language: str
+    url: str
+
+
+@dataclass(slots=True)
 class HstreamEpisode:
     title: str
     year: str
@@ -54,6 +60,8 @@ class HstreamEpisode:
     landscape_url: str
     source_url: str
     streams: list[HstreamStream]
+    subtitles: list[HstreamSubtitle]
+    sample_urls: list[str]
 
 
 def _absolute(url):
@@ -284,11 +292,9 @@ class HstreamResolver:
             ("720p", "720", 720, False),
             ("1080p", "1080", 1080, False),
             ("2160p", "2160", 2160, False),
+            ("1080p48fps", "1080i", 1080, True),
+            ("2160p48fps", "2160i", 2160, True),
         ]
-        if _number(payload.get("interpolated")) == 1:
-            variants.append(("1080p48fps", "1080i", 1080, True))
-        if _number(payload.get("interpolated_uhd")) == 1:
-            variants.append(("2160p48fps", "2160i", 2160, True))
 
         resolved = []
         for label, directory, height, interpolated in variants:
@@ -383,6 +389,29 @@ class HstreamResolver:
             genres = [part.strip() for part in genres.split(",") if part.strip()]
         title = str(payload.get("title") or json_ld.get("name") or item.series_title).strip()
         streams = await self._streams(payload, item.url)
+        subtitles = []
+        seen_subtitles = set()
+        for anchor in document.xpath("//a[@href]"):
+            subtitle_url = _absolute(anchor.get("href"))
+            if not subtitle_url.lower().split("?", 1)[0].endswith(
+                (".ass", ".ssa", ".srt", ".vtt")
+            ):
+                continue
+            if subtitle_url in seen_subtitles:
+                continue
+            label = " ".join(anchor.itertext()).strip().lower()
+            download_name = str(anchor.get("download") or "").lower()
+            language = "eng" if "english" in f"{label} {download_name}" else "und"
+            subtitles.append(HstreamSubtitle(language=language, url=subtitle_url))
+            seen_subtitles.add(subtitle_url)
+        sample_urls = []
+        seen_samples = set()
+        for sample in document.xpath("//img[@data-te-img]/@data-te-img"):
+            sample_url = _absolute(sample)
+            if "gallery-ep-" not in sample_url or sample_url in seen_samples:
+                continue
+            sample_urls.append(sample_url)
+            seen_samples.add(sample_url)
         return HstreamEpisode(
             title=title,
             year=upload_date[:4] if upload_date[:4].isdigit() else "",
@@ -393,4 +422,6 @@ class HstreamResolver:
             landscape_url=_absolute(landscape),
             source_url=item.url,
             streams=streams,
+            subtitles=subtitles,
+            sample_urls=sample_urls,
         )

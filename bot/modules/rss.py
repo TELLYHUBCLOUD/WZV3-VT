@@ -996,6 +996,10 @@ Timeout: 60 sec. Argument -c for command and arguments
 
 
 async def _tmv_monitor():
+    from ..helper.ext_utils.hstream_maintenance import hstream_maintenance
+
+    if hstream_maintenance.pauses_feeds():
+        return False
     if not _as_bool(getattr(Config, "TMV_AUTO_LEECH", False), False):
         return False
     site = str(getattr(Config, "TMV_SITE", "") or "").strip()
@@ -1082,6 +1086,11 @@ async def _tmv_monitor():
 
 
 async def rss_monitor():
+    from ..helper.ext_utils.hstream_maintenance import hstream_maintenance
+
+    if hstream_maintenance.pauses_feeds():
+        LOGGER.info("RSS/TMV monitor paused for owner Hstream maintenance.")
+        return
     chat = Config.RSS_CHAT
     tmv_active = await _tmv_monitor()
     if not chat and not tmv_active:

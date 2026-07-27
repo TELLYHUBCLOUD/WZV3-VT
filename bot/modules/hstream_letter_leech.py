@@ -19,6 +19,7 @@ from pathlib import Path
 from re import sub
 from shutil import rmtree
 from sys import executable
+from urllib.parse import urlsplit
 
 from httpx import AsyncClient
 from PIL import Image, ImageFilter, ImageOps
@@ -28,7 +29,15 @@ from .. import DOWNLOAD_DIR, LOGGER, user_data
 from ..core.config_manager import Config
 from ..core.tg_client import TgClient
 from ..helper.ext_utils.bot_utils import cmd_exec, sync_to_async
-from ..helper.ext_utils.hstream_resolver import HstreamResolver
+from ..helper.ext_utils.hstream_maintenance import hstream_maintenance
+from ..helper.ext_utils.hstream_resolver import (
+    HstreamResolver,
+    HstreamUnavailableError,
+)
+from ..helper.ext_utils.hstream_translation import (
+    HstreamTranslator,
+    translate_subtitle,
+)
 from ..helper.ext_utils.media_utils import get_video_thumbnail
 from ..helper.poster_engine.engine import POSTER_TEMPLATE_COUNT, render_poster_option
 from ..helper.telegram_helper.bot_commands import BotCommands
@@ -36,7 +45,6 @@ from ..helper.telegram_helper.message_utils import edit_message, send_message
 from .batch_task_registry import BatchTaskController
 
 _RUN_LOCK = Lock()
-_DOWNLOAD_SLOTS = Semaphore(2)
 _QUALITY_TIMEOUT = 45 * 60
 _INVALID_FILENAME = r'[\\/:*?"<>|]'
 
@@ -83,7 +91,7 @@ def _fps_label(value):
     return "48fps"
 
 
-def _video_filename(episode, stream):
+def _video_filename(episode, stream, tamil_available):
     title = _safe_filename(episode.title)[:110].rstrip(" .-")
     fps = _fps_label(stream.fps)
     media_details = " ".join(
@@ -91,10 +99,10 @@ def _video_filename(episode, stream):
         for value in (stream.resolution, stream.codec, fps)
         if value
     )
+    subtitle_label = "Tamil + ESub" if tamil_available else "ESub"
     return _safe_filename(
-        "🄰🅂- "
-        f"{title} {media_details} "
-        "[Japanese] ESub ~ [@Anime_Starfall🥰]"
+        f"🄰🅂- {title} [{media_details}] [Jap] {subtitle_label} "
+        "~ [@Anime_Starfall🥰]"
     ) + ".mkv"
 
 
@@ -119,29 +127,54 @@ def _genre_hashtags(genres):
     return " ".join(f"#{tag}" for tag in tags) or "#anime"
 
 
-def _poster_caption(episode):
-    resolution, bit, codec = _quality_summary(episode.streams)
+def _split_description(description, limit=3000):
+    words = str(description or "N/A").split()
+    chunks = []
+    current = []
+    for word in words:
+        candidate = " ".join((*current, word))
+        if current and len(escape(candidate, quote=False)) > limit:
+            chunks.append(" ".join(current))
+            current = [word]
+        else:
+            current.append(word)
+    if current:
+        chunks.append(" ".join(current))
+    return chunks or ["N/A"]
+
+
+def _poster_caption(episode, tamil_available):
     title = escape(episode.title, quote=False)
     year = escape(episode.year, quote=False)
     views = f"{episode.views:,}" if episode.views else "N/A"
     genres = _genre_hashtags(episode.genres)
     description = escape(episode.description or "N/A", quote=False)
-    fixed = (
+    subtitle_label = "Tamil + ESub" if tamil_available else "ESub"
+    header = (
         f"<b>「 {title}{f' - {year}' if year else ''} 」\n"
-        "━━━━━━━━━━━━━━━━━━\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
         "╔════◇═══════════◇════\n"
         f"║ {views} Views\n"
-        f"║ {escape(resolution)} {escape(bit)} {escape(codec)}\n"
-        "║ Japanese ~ ESub\n"
+        f"║ Japanese ~ {subtitle_label}\n"
         "╚════◇═══════════◇════\n\n"
-        f"Genres : {genres}</b>\n\n"
-        "<blockquote expandable><b>Synopsis :\n"
+        f"Genres : {genres}</b>"
     )
-    suffix = "</b></blockquote>\n\n<b>Dropped By ➤ [@Anime_Starfall🥰]</b>"
-    allowance = max(0, 1024 - len(fixed) - len(suffix) - 3)
-    if len(description) > allowance:
-        description = description[:allowance].rsplit(" ", 1)[0] + "..."
-    return fixed + description + suffix
+    full = (
+        f"{header}\n\n<blockquote expandable><b>Synopsis :\n{description}"
+        "</b></blockquote>\n\n<b>Dropped By ➤ [@Anime_Starfall🥰]</b>"
+    )
+    if len(full) <= 1024:
+        return full, []
+    compact = f"{header}\n\n<b>Dropped By ➤ [@Anime_Starfall🥰]</b>"
+    replies = []
+    chunks = _split_description(episode.description)
+    for index, chunk in enumerate(chunks):
+        label = "Synopsis :\n" if index == 0 else ""
+        replies.append(
+            f"<blockquote expandable><b>{label}{escape(chunk, quote=False)}"
+            "</b></blockquote>"
+        )
+    return compact, replies
 
 
 async def _download_image(url, path, thumbnail=False):
@@ -194,6 +227,37 @@ async def _download_subtitles(episode, directory):
             except Exception as error:
                 LOGGER.warning(f"Hstream subtitle download failed: {error}")
     return tracks
+
+
+async def _translate_subtitles(subtitle_tracks, directory, translator):
+    if not subtitle_tracks or translator is None:
+        return subtitle_tracks, False
+    english = [
+        (index, path)
+        for index, (language, path) in enumerate(subtitle_tracks)
+        if str(language or "").casefold() in {"", "und", "eng", "en", "english"}
+    ]
+    if not english:
+        return subtitle_tracks, False
+    translated = []
+    try:
+        for index, source in english:
+            extension = Path(source).suffix.lower()
+            target = ospath.join(directory, f"subtitle_tamil_{index + 1}{extension}")
+            await translate_subtitle(source, target, translator)
+            translated.append(("tam", target))
+        normalized = list(subtitle_tracks)
+        for index, _ in english:
+            normalized[index] = ("eng", normalized[index][1])
+        return normalized + translated, bool(translated)
+    except Exception as error:
+        LOGGER.warning(
+            f"Hstream Tamil subtitle translation failed; using English only: {error}"
+        )
+        for _, path in translated:
+            with suppress(OSError):
+                Path(path).unlink()
+        return subtitle_tracks, False
 
 
 async def _download_sample_images(episode, directory):
@@ -371,9 +435,9 @@ async def _run_ytdlp(url, output_dir, source_url, cancel_event, processes):
         "yt_dlp",
         "--no-playlist",
         "--retries",
-        "5",
+        "2",
         "--fragment-retries",
-        "5",
+        "1",
         "--socket-timeout",
         "30",
         "--no-check-certificates",
@@ -479,7 +543,7 @@ async def _remux_to_mkv(
     command.extend(
         (
             "-metadata:s:s:0",
-            "language=eng",
+            "language=und",
             "-metadata:s:s:0",
             "title=Anime Starfall",
             "-disposition:s:0",
@@ -487,12 +551,19 @@ async def _remux_to_mkv(
         )
     )
     for index, (language, _) in enumerate(subtitle_tracks, start=1):
+        title = (
+            "Tamil Subtitles"
+            if language == "tam"
+            else "English Subtitles"
+            if language == "eng"
+            else "Subtitles"
+        )
         command.extend(
             (
                 f"-metadata:s:s:{index}",
                 f"language={language or 'und'}",
                 f"-metadata:s:s:{index}",
-                "title=English Subtitles" if language == "eng" else "title=Subtitles",
+                f"title={title}",
             )
         )
     command.append(target)
@@ -534,42 +605,72 @@ async def _download_quality(
     directory,
     cancel_event,
     processes,
+    tamil_available,
 ):
-    async with _DOWNLOAD_SLOTS:
-        if cancel_event.is_set():
-            return None
-        quality_dir = ospath.join(directory, stream.label)
-        Path(quality_dir).mkdir(parents=True, exist_ok=True)
-        error = None
-        for url in stream.urls:
-            try:
-                source = await _run_ytdlp(
-                    url, quality_dir, episode.source_url, cancel_event, processes
-                )
-                target = ospath.join(quality_dir, _video_filename(episode, stream))
-                return await _remux_to_mkv(
-                    source,
-                    target,
-                    episode,
-                    subtitle_tracks,
-                    cancel_event,
-                    processes,
-                )
-            except Exception as current:
-                error = current
-                LOGGER.warning(
-                    f"Hstream {episode.title} {stream.label} mirror failed: {current}"
-                )
-                for item in Path(quality_dir).glob("source.*"):
-                    with suppress(OSError):
-                        item.unlink()
-                if cancel_event.is_set():
-                    return None
-        LOGGER.error(f"Hstream quality failed: {episode.title} {stream.label}: {error}")
+    if cancel_event.is_set():
         return None
+    quality_dir = ospath.join(directory, stream.label)
+    Path(quality_dir).mkdir(parents=True, exist_ok=True)
+    error = None
+    seen_mirrors = set()
+    for url in stream.urls:
+        parsed = urlsplit(url)
+        mirror_key = (parsed.netloc.casefold(), parsed.path.rstrip("/"))
+        if mirror_key in seen_mirrors:
+            continue
+        seen_mirrors.add(mirror_key)
+        try:
+            source = await _run_ytdlp(
+                url, quality_dir, episode.source_url, cancel_event, processes
+            )
+            target = ospath.join(
+                quality_dir,
+                _video_filename(episode, stream, tamil_available),
+            )
+            return await _remux_to_mkv(
+                source,
+                target,
+                episode,
+                subtitle_tracks,
+                cancel_event,
+                processes,
+            )
+        except Exception as current:
+            error = current
+            message = str(current)
+            permanent = any(
+                marker in message.casefold()
+                for marker in (
+                    "http error 404",
+                    "fragment 404",
+                    "requested format is not available",
+                    "unsupported url",
+                )
+            )
+            level = LOGGER.info if permanent else LOGGER.warning
+            level(
+                f"Hstream {episode.title} {stream.label} mirror failed: "
+                f"{parsed.netloc or url}: {message[-500:]}"
+            )
+            for item in Path(quality_dir).glob("source.*"):
+                with suppress(OSError):
+                    item.unlink()
+            if cancel_event.is_set():
+                return None
+    LOGGER.error(f"Hstream quality failed: {episode.title} {stream.label}: {error}")
+    return None
 
 
-async def _prepare_episode(resolver, item, index, root, cancel_event, processes, owner_id):
+async def _prepare_episode(
+    resolver,
+    item,
+    index,
+    root,
+    cancel_event,
+    processes,
+    owner_id,
+    translator,
+):
     if cancel_event.is_set():
         return None
     episode = await resolver.resolve(item)
@@ -587,6 +688,11 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
         thumb = ospath.join(directory, "video_thumb.jpg")
         await sync_to_async(_copy_thumbnail, cover, thumb)
     subtitle_tracks = await _download_subtitles(episode, directory)
+    subtitle_tracks, tamil_available = await _translate_subtitles(
+        subtitle_tracks,
+        directory,
+        translator,
+    )
     sample_paths = await _download_sample_images(episode, directory)
     sample_collage = ""
     if sample_paths:
@@ -634,27 +740,26 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
         poster = local_poster
     except Exception as error:
         LOGGER.warning(f"Hstream poster generation failed for {episode.title}: {error}")
-    results = await gather(
-        *(
-            _download_quality(
+    videos = []
+    for stream in episode.streams:
+        if cancel_event.is_set():
+            break
+        try:
+            result = await _download_quality(
                 episode,
                 stream,
                 subtitle_tracks,
                 directory,
                 cancel_event,
                 processes,
+                tamil_available,
             )
-            for stream in episode.streams
-        ),
-        return_exceptions=True,
-    )
-    videos = []
-    for stream, result in zip(episode.streams, results, strict=True):
-        if isinstance(result, Exception):
+        except Exception as error:
             LOGGER.error(
-                f"Hstream download failed for {episode.title} {stream.label}: {result}"
+                f"Hstream download failed for {episode.title} {stream.label}: {error}"
             )
-        elif result:
+            result = None
+        if result:
             videos.append((stream, result))
     if not videos:
         await sync_to_async(rmtree, directory, ignore_errors=True)
@@ -668,10 +773,13 @@ async def _prepare_episode(resolver, item, index, root, cancel_event, processes,
             await sync_to_async(_copy_thumbnail, cover, thumb)
             with suppress(OSError):
                 Path(frame).unlink()
+    caption, caption_replies = _poster_caption(episode, tamil_available)
     return {
         "episode": episode,
         "poster": poster,
-        "caption": _poster_caption(episode),
+        "caption": caption,
+        "caption_replies": caption_replies,
+        "tamil_available": tamil_available,
         "thumb": thumb,
         "cover": cover,
         "videos": videos,
@@ -712,9 +820,10 @@ async def _upload_episode(prepared, destination, thread_id, cancel_event):
     kwargs = {"chat_id": destination}
     if thread_id is not None:
         kwargs["message_thread_id"] = thread_id
+    poster_message = None
     if prepared["poster"] and ospath.isfile(prepared["poster"]):
         try:
-            await _telegram_call(
+            poster_message = await _telegram_call(
                 TgClient.bot.send_photo,
                 photo=prepared["poster"],
                 caption=prepared["caption"],
@@ -722,16 +831,27 @@ async def _upload_episode(prepared, destination, thread_id, cancel_event):
             )
         except Exception as error:
             LOGGER.warning(f"Hstream poster upload failed, sending text: {error}")
-            await _telegram_call(
+            poster_message = await _telegram_call(
                 TgClient.bot.send_message,
                 text=prepared["caption"],
                 **kwargs,
             )
     else:
-        await _telegram_call(
+        poster_message = await _telegram_call(
             TgClient.bot.send_message,
             text=prepared["caption"],
             **kwargs,
+        )
+    for reply in prepared.get("caption_replies", []):
+        if cancel_event.is_set():
+            break
+        reply_kwargs = dict(kwargs)
+        if poster_message:
+            reply_kwargs["reply_to_message_id"] = poster_message.id
+        await _telegram_call(
+            TgClient.bot.send_message,
+            text=reply,
+            **reply_kwargs,
         )
     uploaded = 0
     for stream, path in prepared["videos"]:
@@ -809,11 +929,16 @@ async def hstream_letter_leech(_, message):
         cancel_event = Event()
         processes = set()
         prepare_tasks = set()
+        translator = None
+        maintenance_acquired = False
 
         async def cancel_run(_):
             cancel_event.set()
             for task in list(prepare_tasks):
                 task.cancel()
+            if translator:
+                with suppress(Exception):
+                    await translator.stop()
             await gather(
                 *(_stop_process(process) for process in list(processes)),
                 return_exceptions=True,
@@ -827,6 +952,60 @@ async def hstream_letter_leech(_, message):
         failed = 0
         try:
             await TgClient.bot.get_chat(destination)
+            maintenance_acquired = await hstream_maintenance.request(
+                controller.user_id
+            )
+            if not maintenance_acquired:
+                await send_message(
+                    message,
+                    "Another Hstream maintenance run is already active.",
+                )
+                return
+            cancel_cmd = f"/{BotCommands.CancelTaskCommand[1]}_{controller.gid}"
+            status = await send_message(
+                message,
+                (
+                    f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
+                    "Waiting for current bot and RSS tasks to finish.\n"
+                    f"Stop: <code>{cancel_cmd}</code>"
+                ),
+            )
+            last_waiting = None
+
+            async def waiting_progress(normal_count, rss_count):
+                nonlocal status, last_waiting
+                current = (normal_count, rss_count)
+                if current == last_waiting or not status:
+                    return
+                last_waiting = current
+                with suppress(Exception):
+                    status = await edit_message(
+                        status,
+                        (
+                            f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
+                            f"Waiting: <code>{normal_count}</code> normal | "
+                            f"<code>{rss_count}</code> RSS/TMV task(s)\n"
+                            f"Stop: <code>{cancel_cmd}</code>"
+                        ),
+                    )
+
+            if not await hstream_maintenance.wait_until_idle(
+                cancel_event,
+                waiting_progress,
+            ):
+                return
+            translator = HstreamTranslator()
+            try:
+                await translator.start(cancel_event)
+                LOGGER.info("Hstream NLLB Tamil translator is ready.")
+            except Exception as error:
+                if cancel_event.is_set():
+                    return
+                LOGGER.error(
+                    f"Hstream Tamil translator unavailable; using ESub only: {error}"
+                )
+                translator = None
+
             async with HstreamResolver() as resolver:
                 items = await resolver.discover(tokens[1])
                 if not items:
@@ -835,60 +1014,48 @@ async def hstream_letter_leech(_, message):
                         f"No Hstream episodes found for <code>{escape(tokens[1])}</code>.",
                     )
                     return
-                cancel_cmd = f"/{BotCommands.CancelTaskCommand[1]}_{controller.gid}"
-                status = await send_message(
-                    message,
+                status = await edit_message(
+                    status,
                     (
                         f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
                         f"Episodes: <code>{len(items)}</code>\n"
-                        "Pipeline: <code>2 downloads / 1 upload</code>\n"
+                        "Pipeline: <code>1 episode / sequential qualities</code>\n"
+                        f"Tamil: <code>{'ready' if translator else 'ESub fallback'}</code>\n"
                         f"Stop: <code>{cancel_cmd}</code>"
                     ),
                 )
 
-                pending = {}
-                next_to_schedule = 0
-
-                def schedule(index):
+                for index, item in enumerate(items):
+                    if cancel_event.is_set():
+                        break
                     task = create_task(
                         _prepare_episode(
                             resolver,
-                            items[index],
+                            item,
                             index,
                             root,
                             cancel_event,
                             processes,
                             controller.user_id,
+                            translator,
                         )
                     )
-                    pending[index] = task
                     prepare_tasks.add(task)
                     task.add_done_callback(prepare_tasks.discard)
-
-                while next_to_schedule < min(2, len(items)):
-                    schedule(next_to_schedule)
-                    next_to_schedule += 1
-
-                for index, item in enumerate(items):
-                    if cancel_event.is_set():
-                        break
-                    task = pending.pop(index)
                     try:
                         prepared = await task
                     except CancelledError:
                         if cancel_event.is_set():
                             break
                         raise
-                    except Exception as error:
-                        LOGGER.error(
-                            f"Hstream preparation failed for {item.url}: {error}",
-                            exc_info=True,
-                        )
+                    except HstreamUnavailableError as error:
+                        LOGGER.info(f"Skipping unavailable Hstream page {item.url}: {error}")
                         prepared = None
                         failed += 1
-                    if next_to_schedule < len(items) and not cancel_event.is_set():
-                        schedule(next_to_schedule)
-                        next_to_schedule += 1
+                    except Exception as error:
+                        LOGGER.error(f"Hstream preparation failed for {item.url}: {error}")
+                        prepared = None
+                        failed += 1
                     if prepared:
                         try:
                             uploaded += await _upload_episode(
@@ -942,5 +1109,10 @@ async def hstream_letter_leech(_, message):
                 *(_stop_process(process) for process in list(processes)),
                 return_exceptions=True,
             )
+            if translator:
+                with suppress(Exception):
+                    await translator.stop()
+            if maintenance_acquired:
+                await hstream_maintenance.release()
             await sync_to_async(rmtree, root, ignore_errors=True)
             controller.close()

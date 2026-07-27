@@ -35,6 +35,7 @@ from .ext_utils.files_utils import (
     is_supported_archive,
     split_file,
 )
+from .ext_utils.hstream_maintenance import hstream_maintenance
 from .ext_utils.links_utils import (
     is_gdrive_id,
     is_gdrive_link,
@@ -216,6 +217,11 @@ class TaskConfig:
                 raise ValueError(f"NO TOKEN! {token_path} not Exists!")
 
     async def before_start(self):
+        if hstream_maintenance.blocks_tasks():
+            raise ValueError(
+                "Owner Hstream maintenance is active. New download and upload "
+                "tasks will resume when it finishes."
+            )
         self.name_swap = (
             self.name_swap
             or self.user_dict.get("NAME_SWAP", False)

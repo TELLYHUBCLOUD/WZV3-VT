@@ -22,6 +22,10 @@ _HEADERS = {
 }
 
 
+class HstreamUnavailableError(RuntimeError):
+    pass
+
+
 @dataclass(slots=True)
 class HstreamCatalogItem:
     series_title: str
@@ -358,13 +362,15 @@ class HstreamResolver:
 
     async def resolve(self, item: HstreamCatalogItem):
         page = await self._request("GET", item.url)
+        if page.status_code in {404, 410}:
+            raise HstreamUnavailableError("stale or deleted Hstream catalog page")
         page.raise_for_status()
         document = html.fromstring(page.content)
         json_ld = _json_ld(document)
         episode_id = document.xpath("string(//input[@id='e_id']/@value)").strip()
         token = document.xpath("string(//input[@name='_token']/@value)").strip()
         if not episode_id:
-            raise RuntimeError("Hstream episode id was not found")
+            raise HstreamUnavailableError("stale or deleted Hstream catalog page")
         data = {"episode_id": episode_id}
         if token:
             data["_token"] = token
@@ -374,6 +380,8 @@ class HstreamResolver:
             data=data,
             headers={"Referer": item.url, "X-Requested-With": "XMLHttpRequest"},
         )
+        if player.status_code in {404, 410}:
+            raise HstreamUnavailableError("Hstream player data is unavailable")
         player.raise_for_status()
         payload = player.json()
 
@@ -404,9 +412,31 @@ class HstreamResolver:
             language = "eng" if "english" in f"{label} {download_name}" else "und"
             subtitles.append(HstreamSubtitle(language=language, url=subtitle_url))
             seen_subtitles.add(subtitle_url)
+        description_parts = document.xpath(
+            "(//*[self::h1 or self::h2 or self::h3]"
+            "[translate(normalize-space(.), 'DESCRIPTION', 'description')='description']"
+            "/following::*[self::p or self::div][normalize-space()][1])//text()"
+        )
+        description = " ".join(
+            " ".join(str(value).split())
+            for value in description_parts
+            if str(value).strip()
+        ).strip()
+        if not description:
+            description = str(json_ld.get("description") or "").strip()
+
         sample_urls = []
         seen_samples = set()
-        for sample in document.xpath("//img[@data-te-img]/@data-te-img"):
+        samples = document.xpath(
+            "//img[contains(@data-te-img, 'gallery-ep-')]/@data-te-img"
+        )
+        if not samples:
+            samples = document.xpath(
+                "//a[contains(@href, 'gallery-ep-')]/@href"
+                " | //img[contains(@data-src, 'gallery-ep-')]/@data-src"
+                " | //img[contains(@src, 'gallery-ep-')]/@src"
+            )
+        for sample in samples:
             sample_url = _absolute(sample)
             if "gallery-ep-" not in sample_url or sample_url in seen_samples:
                 continue
@@ -415,7 +445,7 @@ class HstreamResolver:
         return HstreamEpisode(
             title=title,
             year=upload_date[:4] if upload_date[:4].isdigit() else "",
-            description=str(json_ld.get("description") or "").strip(),
+            description=description,
             genres=[str(value).strip() for value in genres if str(value).strip()],
             views=_interaction_count(json_ld.get("interactionStatistic")),
             portrait_url=_absolute(portrait),

@@ -1,3 +1,15 @@
+FROM python:3.12-slim-bookworm AS nllb-builder
+
+RUN python -m pip install --no-cache-dir \
+        "ctranslate2==4.8.1" \
+        "transformers[torch]<5" \
+        sentencepiece \
+    && ct2-transformers-converter \
+        --model facebook/nllb-200-distilled-600M \
+        --output_dir /opt/models/nllb-200-distilled-600M-int8 \
+        --quantization int8 \
+        --copy_files tokenizer.json tokenizer_config.json sentencepiece.bpe.model special_tokens_map.json
+
 FROM python:3.12-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -65,6 +77,8 @@ RUN uv pip install --python /wzvenv/bin/python --no-cache -r requirements.txt \
         pkg-config \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/* /root/.cache
+
+COPY --from=nllb-builder /opt/models/nllb-200-distilled-600M-int8 /opt/models/nllb-200-distilled-600M-int8
 
 COPY . .
 RUN chmod +x start.sh setpkgs.sh

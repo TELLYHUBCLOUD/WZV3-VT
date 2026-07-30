@@ -1,6 +1,4 @@
-from psutil import cpu_percent, virtual_memory, disk_usage
 from contextlib import suppress
-from time import time
 from asyncio import gather, iscoroutinefunction
 
 from pyrogram.enums import ButtonStyle
@@ -10,10 +8,8 @@ from .. import (
     task_dict_lock,
     status_dict,
     task_dict,
-    bot_start_time,
     intervals,
     sabnzbd_client,
-    DOWNLOAD_DIR,
 )
 from ..core.config_manager import Config
 from ..core.torrent_manager import TorrentManager
@@ -22,11 +18,12 @@ from ..helper.ext_utils.bot_utils import new_task
 from ..helper.ext_utils.status_utils import (
     EngineStatus,
     MirrorStatus,
+    get_legacy_system_status,
     get_readable_file_size,
-    get_readable_time,
+    get_starfall_system_status,
+    is_starfall_theme,
     speed_string_to_bytes,
 )
-from ..helper.telegram_helper.bot_commands import BotCommands
 from ..helper.telegram_helper.message_utils import (
     send_message,
     delete_message,
@@ -43,16 +40,13 @@ async def task_status(_, message):
     async with task_dict_lock:
         count = len(task_dict)
     if count == 0:
-        currentTime = get_readable_time(time() - bot_start_time)
-        free = get_readable_file_size(disk_usage(DOWNLOAD_DIR).free)
-        msg = f"""〶 <b><i>No Active Bot Tasks!</i></b>
-│
-┖ <b>NOTE</b> → <i>Each user can get status for his tasks by adding "me" or user_id like "1234xxx" after cmd: /{BotCommands.StatusCommand[0]} me or /{BotCommands.StatusCommand[1]} me</i>
-
-⌬ <b><u>Bot Stats</u></b>
-┟ <b>CPU</b> → {cpu_percent()}% | <b>F</b> → {free} [{round(100 - disk_usage(DOWNLOAD_DIR).percent, 1)}%]
-┖ <b>RAM</b> → {virtual_memory().percent}% | <b>UP</b> → {currentTime}
-"""
+        if is_starfall_theme():
+            msg = (
+                "𝆺𝅥⃝🐦‍🔥❯ <b>No Active Bot Tasks!</b>\n\n"
+                f"{get_starfall_system_status()}"
+            )
+        else:
+            msg = f"〶 <b><i>No Active Bot Tasks!</i></b>\n\n{get_legacy_system_status()}"
         reply_message = await send_message(message, msg)
         await auto_delete_message(message, reply_message)
     else:
@@ -218,8 +212,27 @@ async def status_pages(_, query):
                 case _:
                     tasks["Download"] += 1
 
-        msg = f"""㊂ <b>Tasks Overview</b> :
-        
+        if is_starfall_theme():
+            msg = f"""◉⃝     <b>Tasks Overview</b>  ◉⃝
+╔══════════════════
+╠ Download ➥ {tasks["Download"]} | Upload ➥ {tasks["Upload"]}
+╠ Seed ➥ {tasks["Seed"]} | Archive ➥ {tasks["Archive"]}
+╠ Extract ➥ {tasks["Extract"]} | Split ➥ {tasks["Split"]}
+╠ QueueDL ➥ {tasks["QueueDl"]} | QueueUP ➥ {tasks["QueueUp"]}
+╠ Clone ➥ {tasks["Clone"]} | CheckUp ➥ {tasks["CheckUp"]}
+╠ Paused ➥ {tasks["Pause"]} | SamVideo ➥ {tasks["SamVid"]}
+╠ Convert ➥ {tasks["ConvertMedia"]} | FFmpeg ➥ {tasks["FFmpeg"]}
+╚══════════════════
+
+◉⃝     <b>Transfer Speeds</b>  ◉⃝
+╔══════════════════
+╠ Download ➥ {get_readable_file_size(dl_speed)}/s
+╠ Upload ➥ {get_readable_file_size(up_speed)}/s
+╠ Seeding ➥ {get_readable_file_size(seed_speed)}/s
+╚══════════════════"""
+        else:
+            msg = f"""㊂ <b>Tasks Overview</b> :
+
 ┎ <b>Download:</b> {tasks["Download"]} | <b>Upload:</b> {tasks["Upload"]}
 ┠ <b>Seed:</b> {tasks["Seed"]} | <b>Archive:</b> {tasks["Archive"]}
 ┠ <b>Extract:</b> {tasks["Extract"]} | <b>Split:</b> {tasks["Split"]}
@@ -230,10 +243,9 @@ async def status_pages(_, query):
 │
 ┟ <b>Total Download Speed:</b> {get_readable_file_size(dl_speed)}/s
 ┠ <b>Total Upload Speed:</b> {get_readable_file_size(up_speed)}/s
-┖ <b>Total Seeding Speed:</b> {get_readable_file_size(seed_speed)}/s
-"""
+┖ <b>Total Seeding Speed:</b> {get_readable_file_size(seed_speed)}/s"""
         button = ButtonMaker()
-        button.data_button("\U0001F519 Back", f"status {data[1]} ref", style=ButtonStyle.PRIMARY)
+        button.data_button("⬅️ Back", f"status {data[1]} ref", style=ButtonStyle.PRIMARY)
         await edit_message(message, msg, button.build_menu())
 
     try:

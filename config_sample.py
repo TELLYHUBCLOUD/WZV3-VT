@@ -111,7 +111,7 @@ ARIA2_MAX_CONCURRENT_DOWNLOADS = 4
 ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT = "0"
 ARIA2_MAX_OVERALL_UPLOAD_LIMIT = "1M"
 QBIT_UPLOAD_LIMIT = 1048576
-BOT_THEME = "starfall_neo"  # starfall_neo, classic
+BOT_THEME = "starfall"  # starfall, classic
 STATUS_THEME = "starfall"  # legacy fallback
 
 # Create Torrent release pack

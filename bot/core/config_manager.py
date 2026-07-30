@@ -108,7 +108,7 @@ class Config:
     ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT = "0"
     ARIA2_MAX_OVERALL_UPLOAD_LIMIT = "1M"
     QBIT_UPLOAD_LIMIT = 1048576
-    BOT_THEME = "starfall_neo"
+    BOT_THEME = "starfall"
     STATUS_THEME = "starfall"
     LIBRE_TRANSLATE_API_URL = ""
     LIBRE_TRANSLATE_API_KEY = ""

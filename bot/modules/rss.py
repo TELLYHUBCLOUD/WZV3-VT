@@ -997,6 +997,8 @@ Timeout: 60 sec. Argument -c for command and arguments
 
 async def _tmv_monitor():
     from ..helper.ext_utils.hstream_maintenance import hstream_maintenance
+    from ..helper.ext_utils.tamilmv_resolver import resolve_tamilmv
+    from .tamilmv import queue_tamilmv_candidates
 
     if hstream_maintenance.pauses_feeds():
         return False
@@ -1016,72 +1018,22 @@ async def _tmv_monitor():
         LOGGER.warning("TMV_AUTO_LEECH enabled but TMV_DUMP_CHAT/RSS_CHAT is empty.")
         return True
 
-    try:
-        async with AsyncClient(
-            headers=headers,
-            follow_redirects=True,
-            timeout=60,
-        ) as client:
-            res = await client.get(site)
-        rss_d = _parse_feed(res.text)
-    except Exception as err:
-        LOGGER.error(f"TMV: failed to fetch {site}: {err}")
-        return True
-
-    if not rss_d.entries:
-        content_type = res.headers.get("content-type", "unknown")
-        LOGGER.warning(
-            f"TMV: no entries found for {site}. "
-            f"Content-Type: {content_type}. "
-            "Set TMV_SITE to a RSS/API feed URL, not the normal website home page."
-        )
-        return True
-
-    latest_url = _entry_url(rss_d.entries[0])
-    category = str(getattr(Config, "TMV_CATEGORY", "tamil") or "").strip()
-    keywords = _category_keywords(category)
-    last_link = str(getattr(Config, "TMV_LAST_LINK", "") or "")
     owner_id = (
         int(Config.OWNER_ID)
         if str(Config.OWNER_ID).isdigit()
         else Config.OWNER_ID
     )
-    started = 0
-    for entry in rss_d.entries:
-        item_title = _entry_title(entry)
-        url = _entry_url(entry)
-        if not item_title or not url:
-            continue
-        if last_link and url == last_link:
-            break
-        if keywords and not any(key in _entry_text(entry) for key in keywords):
-            continue
-        create_task(
-            _start_rss_download(
-                url=url,
-                command="leech",
-                user_id=owner_id,
-                rss_chat_id=tmv_chat_id,
-                rss_topic_id=tmv_topic_id,
-                item_title=item_title,
-                auto_leech=True,
-                rename_mode="title",
-                leech_by="bot",
-                rss_upload_chat=dump,
-            )
+    try:
+        candidates = await resolve_tamilmv(site)
+        started = await queue_tamilmv_candidates(
+            candidates,
+            dump,
+            owner_id,
         )
-        started += 1
-
-    if started and latest_url and latest_url != last_link:
-        Config.set("TMV_LAST_LINK", latest_url)
-        await database.update_config({"TMV_LAST_LINK": latest_url})
-    if started:
-        LOGGER.info(f"TMV: queued {started} auto-leech item(s).")
-    else:
-        LOGGER.info(
-            f"TMV: no new matching items for category '{category or 'all'}'. "
-            "TMV_LAST_LINK was not changed."
-        )
+    except Exception as err:
+        LOGGER.error(f"TMV: failed to resolve {site}: {err}", exc_info=True)
+        return True
+    LOGGER.info("TMV: queued %s new torrent(s) from %s candidate(s).", started, len(candidates))
     return True
 
 

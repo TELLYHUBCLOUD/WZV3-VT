@@ -9,6 +9,7 @@ try:
         MegaError,
         MegaListener,
         MegaRequest,
+        MegaStringList,
         MegaTransfer,
         MegaUploadOptions,
     )
@@ -56,6 +57,11 @@ except Exception as e:
     class _MissingMegaUploadOptions:
         pass
 
+    class _MissingMegaStringList:
+        @staticmethod
+        def createInstance():
+            return None
+
     class _MissingMegaListener:
         pass
 
@@ -64,6 +70,7 @@ except Exception as e:
     MegaError = _MissingMegaError
     MegaListener = _MissingMegaListener
     MegaRequest = _MissingMegaRequest
+    MegaStringList = _MissingMegaStringList
     MegaTransfer = _MissingMegaTransfer
     MegaUploadOptions = _MissingMegaUploadOptions
 

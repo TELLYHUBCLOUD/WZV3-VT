@@ -354,6 +354,27 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            hstream_pause,
+            filters=command(f"hspause{Config.CMD_SUFFIX}", case_sensitive=True)
+            & CustomFilters.owner,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            hstream_resume,
+            filters=command(f"hsresume{Config.CMD_SUFFIX}", case_sensitive=True)
+            & CustomFilters.owner,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            tamilmv,
+            filters=command(f"tmv{Config.CMD_SUFFIX}", case_sensitive=True)
+            & CustomFilters.owner,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             ping,
             filters=command(BotCommands.PingCommand, case_sensitive=True)
             & CustomFilters.authorized,
@@ -402,6 +423,12 @@ def add_handlers():
         MessageHandler(
             video_tools_media_collector,
             filters=create(active_merge_track_filter) & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            video_tools_text_collector,
+            filters=create(active_merge_text_filter) & CustomFilters.authorized,
         )
     )
     TgClient.bot.add_handler(CallbackQueryHandler(start_cb, filters=regex("^start")))

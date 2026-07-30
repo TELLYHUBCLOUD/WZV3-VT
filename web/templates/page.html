@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Torrent File Selector</title>
+    <title>Starfall File Selector</title>
     <link rel="icon" href="https://graph.org/file/1a6ad157f55bc42b548df.png" type="image/jpg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,7 +24,7 @@
         }
 
         body {
-            background-color: #0D1117;
+            background-color: #101418;
             min-height: 100vh;
         }
 
@@ -35,7 +35,7 @@
             align-items: center;
             justify-content: space-between;
             border-radius: 30px;
-            background-color: #161B22;
+            background-color: #182027;
             border: 2px solid rgba(255, 255, 255, 0.11);
         }
 
@@ -63,7 +63,7 @@
         }
 
         .name a {
-            color: white;
+            color: #67d5c2;
             text-decoration: none;
         }
 
@@ -371,7 +371,7 @@
     <header>
         <div class="brand">
             <img src="https://graph.org/file/1a6ad157f55bc42b548df.png" alt="logo">
-            <h2 class="name"><a href="https://t.me/WZML_X">Torrent Selector</a></h2>
+            <h2 class="name"><a href="#">Starfall Selector</a></h2>
         </div>
         <div class="social">
             <a href="https://www.github.com/SilentDemonSD/WZML-X"><i class="fab fa-github"></i></a>
@@ -746,7 +746,8 @@
                 const newName = editNameInput.value.trim();
                 if (newName && newName !== node.name) {
                     const fullPath = getFullPath(node);
-                    const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=rename`;
+            const endpoint = urlParams.type === 'mega' ? '/app/files/mega' : '/app/files/torrent';
+            const requestUrl = `${endpoint}?gid=${urlParams.gid}&pin=${pinInput.value}&mode=rename`;
                     const body = {
                         old_path: fullPath ? `${fullPath}/${node.name}` : node.name,
                         new_path: fullPath ? `${fullPath}/${newName}` : newName,
@@ -804,7 +805,8 @@
             modalBody.innerHTML = `<p>Submitting, ${checkedFilesEl.innerText} file(s)... </p>`;
             modalFooter.innerHTML = '';
             openModal();
-            const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
+            const endpoint = urlParams.type === 'mega' ? '/app/files/mega' : '/app/files/torrent';
+            const requestUrl = `${endpoint}?gid=${urlParams.gid}&pin=${pinInput.value}&mode=selection`;
             fetch(requestUrl, { 'method': 'POST', 'body': JSON.stringify(files) }).then(response => {
                 if (reusableModal.style.display === 'block') {
                     closeModal();
@@ -842,7 +844,8 @@
                 openModal();
                 return false;
             }
-            const requestUrl = `/app/files/torrent?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
+            const endpoint = urlParams.type === 'mega' ? '/app/files/mega' : '/app/files/torrent';
+            const requestUrl = `${endpoint}?gid=${urlParams.gid}&pin=${pinInput.value}&mode=get`;
             fetch(requestUrl).then(function (response) {
                 if (response.ok) {
                     return response.json().then(data => {

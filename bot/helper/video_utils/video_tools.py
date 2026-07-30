@@ -8,6 +8,7 @@ from time import time
 
 from aiofiles import open as aiopen
 from aiofiles.os import listdir, makedirs, path as aiopath, remove, rename
+from aioshutil import rmtree
 
 from ... import LOGGER, DOWNLOAD_DIR
 from ...core.config_manager import BinConfig, Config
@@ -74,6 +75,20 @@ def _lang_aliases(value):
         "hindi": {"hi", "hin", "hindi"},
     }
     return aliases.get(lang, {lang})
+
+
+def _normalize_language(value):
+    token = str(value or "und").strip().lower()
+    normalized = {
+        "ta": "tam", "tamil": "tam", "tam": "tam",
+        "en": "eng", "english": "eng", "eng": "eng",
+        "hi": "hin", "hindi": "hin", "hin": "hin",
+        "te": "tel", "telugu": "tel", "tel": "tel",
+        "ja": "jpn", "japanese": "jpn", "jpn": "jpn",
+        "ko": "kor", "korean": "kor", "kor": "kor",
+        "zh": "zho", "chinese": "zho", "mandarin": "zho", "zho": "zho",
+    }
+    return normalized.get(token, token[:3] or "und")
 
 
 def _track_matches(track, wanted):
@@ -168,10 +183,11 @@ async def probe_streams(file_path):
     return audio_tracks, sub_tracks
 
 
-def _base_state(task_id, filename, audio_tracks, sub_tracks):
+def _base_state(task_id, filename, audio_tracks, sub_tracks, input_path=""):
     return {
         "task_id": task_id,
         "filename": filename,
+        "input_path": input_path,
         "audio_tracks": audio_tracks,
         "sub_tracks": sub_tracks,
         "external_audio": [],
@@ -194,12 +210,25 @@ def _base_state(task_id, filename, audio_tracks, sub_tracks):
         "external_dir": "",
         "merge_intake": False,
         "merge_last_time": 0,
+        "merge_idle": False,
+        "awaiting_input": None,
+        "preview_path": "",
+        "preview_stale": True,
+        "busy": False,
         "video_merge": False,
         "completed": False,
     }
 
 
 async def _refresh_external_tracks(state, input_path):
+    saved_audio = {
+        (item.get("path"), item.get("stream_index")): {
+            "language": item.get("language", "und"),
+            "title": item.get("title", ""),
+            "delay_ms": item.get("delay_ms", 0),
+        }
+        for item in state.get("external_audio", [])
+    }
     dir_path = ospath.dirname(input_path)
     input_name = ospath.basename(input_path)
     external_audio = []
@@ -220,18 +249,18 @@ async def _refresh_external_tracks(state, input_path):
                 continue
             ext = ospath.splitext(name)[1].lower()
             if ext in AUDIO_EXTENSIONS:
-                external_audio.append(
-                    {"index": len(external_audio), "name": name, "path": path}
-                )
+                external_audio.append(_external_audio_item(len(external_audio), name, path))
             elif ext in VIDEO_EXTENSIONS:
-                external_audio.append(
-                    {"index": len(external_audio), "name": f"Audio from {name}", "path": path}
-                )
+                external_audio.extend(await _external_video_audio_items(path, len(external_audio)))
             elif ext in SUBTITLE_EXTENSIONS:
                 external_sub.append(
                     {"index": len(external_sub), "name": name, "path": path}
                 )
 
+    for item in external_audio:
+        saved = saved_audio.get((item.get("path"), item.get("stream_index")))
+        if saved:
+            item.update(saved)
     state["external_audio"] = external_audio
     state["external_sub"] = external_sub
     state["merge_audio"] = [
@@ -258,11 +287,12 @@ async def start_merge_track_intake(vt_msg, state, event):
     await _ensure_external_dir(state)
     state["merge_intake"] = True
     state["merge_last_time"] = time()
+    state["merge_idle"] = False
     timeout = _merge_track_timeout()
     await vt_msg.edit(
         "<b>Merge Tracks Intake</b>\n\n"
-        f"Send audio, subtitle, or video files now. The bot waits {timeout} seconds after "
-        "the last received file, then starts muxing automatically."
+        f"Send audio, subtitle, or video files now. Intake becomes idle after {timeout} "
+        "seconds, but muxing starts only when you press Done."
     )
     create_task(_merge_intake_timer(vt_msg, state, event))
 
@@ -275,14 +305,58 @@ async def _merge_intake_timer(vt_msg, state, event):
         await sleep(min(remaining, 3))
     if state.get("completed"):
         return
-    state["merge_intake"] = False
-    _select_all_external_tracks(state)
-    state["completed"] = True
+    state["merge_idle"] = True
     try:
-        await vt_msg.edit("<b>Merge Tracks:</b> intake finished. Starting mux process...")
+        from ...modules.video_tool_ui import render_merge_intake
+
+        await render_merge_intake(vt_msg, state)
     except Exception:
         pass
-    event.set()
+
+
+def _external_audio_item(index, name, path, stream_index=0, language="und", title=""):
+    return {
+        "index": index,
+        "name": name,
+        "path": path,
+        "stream_index": stream_index,
+        "language": language or "und",
+        "title": title or ospath.splitext(name)[0],
+        "delay_ms": 0,
+    }
+
+
+async def _external_video_audio_items(video_path, start_index):
+    result = await cmd_exec(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index:stream_tags=language,title",
+            "-of", "json", video_path,
+        ]
+    )
+    items = []
+    if result[2] == 0:
+        with suppress(Exception):
+            for audio_index, stream in enumerate(json.loads(result[0] or "{}").get("streams", [])):
+                tags = stream.get("tags") or {}
+                name = f"{ospath.basename(video_path)} - audio {audio_index + 1}"
+                items.append(
+                    _external_audio_item(
+                        start_index + len(items),
+                        name,
+                        video_path,
+                        audio_index,
+                        tags.get("language", "und"),
+                        tags.get("title", name),
+                    )
+                )
+    return items or [
+        _external_audio_item(
+            start_index,
+            f"Audio from {ospath.basename(video_path)}",
+            video_path,
+        )
+    ]
 
 
 def _message_merge_media(message):
@@ -312,8 +386,130 @@ def _find_merge_intake_session(message):
     return None
 
 
+def _find_merge_text_session(message):
+    user = message.from_user or message.sender_chat
+    if not user:
+        return None
+    for item in _active_vt_sessions.values():
+        listener = item.get("listener")
+        state = item.get("state")
+        if (
+            listener
+            and state
+            and state.get("awaiting_input")
+            and getattr(listener, "user_id", None) == user.id
+        ):
+            return item
+    return None
+
+
 async def active_merge_track_filter(_, __, message):
     return bool(_message_merge_media(message) and _find_merge_intake_session(message))
+
+
+async def active_merge_text_filter(_, __, message):
+    return bool(message.text and not message.text.startswith("/") and _find_merge_text_session(message))
+
+
+async def video_tools_text_collector(_, message):
+    session = _find_merge_text_session(message)
+    if not session:
+        return
+    state = session["state"]
+    field, index = state.pop("awaiting_input")
+    item = next(
+        (entry for entry in state.get("external_audio", []) if entry["index"] == index),
+        None,
+    )
+    if not item:
+        await send_message(message, "Merge track no longer exists.")
+        return
+    value = (message.text or "").strip()
+    if field == "delay_ms":
+        if not re.fullmatch(r"[+-]?\d+", value):
+            state["awaiting_input"] = (field, index)
+            await send_message(message, "Audio delay must be a signed integer in milliseconds, for example <code>-250</code> or <code>1200</code>.")
+            return
+        value = max(-3_600_000, min(3_600_000, int(value)))
+    elif field == "language":
+        value = _normalize_language(value)
+    else:
+        value = value[:80] or item.get("title") or "External Audio"
+    item[field] = value
+    state["preview_stale"] = True
+    await send_message(message, f"Updated <b>{field.replace('_', ' ').title()}</b>: <code>{value}</code>")
+
+
+def finish_merge_track_intake(state, event):
+    if not state.get("merge_audio") and not state.get("merge_sub"):
+        raise ValueError("Send and select at least one audio or subtitle track first.")
+    state["merge_intake"] = False
+    state["merge_idle"] = False
+    state["completed"] = True
+    event.set()
+
+
+async def generate_merge_preview(state):
+    session = _active_vt_sessions.get(state.get("task_id"))
+    listener = session.get("listener") if session else None
+    input_path = state.get("input_path")
+    if not listener or not input_path or not await aiopath.isfile(input_path):
+        raise ValueError("Preview becomes available after the main video is downloaded.")
+    if state.get("busy"):
+        raise ValueError("A probe, preview, or mux operation is already running.")
+
+    state["busy"] = True
+    preview_path = ospath.join(
+        ospath.dirname(input_path), f"vt_preview_{state['task_id']}.mp4"
+    )
+    try:
+        from ..ext_utils.media_utils import get_media_info
+
+        duration = float((await get_media_info(input_path))[0] or 0)
+        preview_duration = min(60, max(1, int(duration or 60)))
+        start = max(0, (duration - preview_duration) / 2) if duration else 0
+        cmd = [
+            BinConfig.FFMPEG_NAME, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{start:.3f}", "-i", input_path,
+        ]
+        selected = [
+            item
+            for item in state.get("external_audio", [])
+            if item["index"] in state.get("merge_audio", [])
+        ]
+        for item in selected:
+            if item.get("delay_ms"):
+                cmd.extend(["-itsoffset", f"{int(item['delay_ms']) / 1000:.3f}"])
+            cmd.extend(["-i", item["path"]])
+        cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        for input_index, item in enumerate(selected, start=1):
+            cmd.extend(["-map", f"{input_index}:a:{int(item.get('stream_index', 0))}?"])
+        cmd.extend(
+            [
+                "-t", str(preview_duration), "-vf",
+                "scale=-2:720:force_original_aspect_ratio=decrease",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
+                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                preview_path,
+            ]
+        )
+        result = await cmd_exec(cmd)
+        if result[2] != 0 or not await aiopath.isfile(preview_path):
+            raise RuntimeError((result[1] or "FFmpeg preview failed")[-500:])
+        previous = state.get("preview_message")
+        if previous:
+            with suppress(Exception):
+                await previous.delete()
+        state["preview_message"] = await listener.message.reply_video(
+            preview_path,
+            caption="<b>60-second middle preview</b>",
+            supports_streaming=True,
+        )
+        state["preview_path"] = preview_path
+        state["preview_stale"] = False
+        return preview_path
+    finally:
+        state["busy"] = False
 
 
 async def video_tools_media_collector(client, message):
@@ -338,14 +534,13 @@ async def video_tools_media_collector(client, message):
     state["merge_last_time"] = time()
     if ext in AUDIO_EXTENSIONS:
         state["external_audio"].append(
-            {"index": len(state["external_audio"]), "name": ospath.basename(downloaded), "path": downloaded}
+            _external_audio_item(len(state["external_audio"]), ospath.basename(downloaded), downloaded)
         )
         state["merge_audio"].append(len(state["external_audio"]) - 1)
     elif ext in VIDEO_EXTENSIONS:
-        state["external_audio"].append(
-            {"index": len(state["external_audio"]), "name": f"Audio from {ospath.basename(downloaded)}", "path": downloaded}
-        )
-        state["merge_audio"].append(len(state["external_audio"]) - 1)
+        items = await _external_video_audio_items(downloaded, len(state["external_audio"]))
+        state["external_audio"].extend(items)
+        state["merge_audio"].extend(item["index"] for item in items)
     elif ext in SUBTITLE_EXTENSIONS:
         state["external_sub"].append(
             {"index": len(state["external_sub"]), "name": ospath.basename(downloaded), "path": downloaded}
@@ -353,7 +548,7 @@ async def video_tools_media_collector(client, message):
         state["merge_sub"].append(len(state["external_sub"]) - 1)
     await send_message(
         message,
-        f"Video Tools: received <code>{ospath.basename(downloaded)}</code>. Timer reset to {_merge_track_timeout()} seconds.",
+        f"Video Tools: received <code>{ospath.basename(downloaded)}</code>. Configure tracks, preview, then press Done.",
     )
 
 
@@ -600,7 +795,9 @@ async def process_video_tool(listener, up_path):
     # Probe the file
     audio_tracks, sub_tracks = await probe_streams(up_path)
     task_id = str(listener.mid)
-    state = _base_state(task_id, ospath.basename(up_path), audio_tracks, sub_tracks)
+    state = _base_state(
+        task_id, ospath.basename(up_path), audio_tracks, sub_tracks, up_path
+    )
     await _refresh_external_tracks(state, up_path)
 
     if (
@@ -642,9 +839,15 @@ async def process_video_tool(listener, up_path):
         try:
             await wait_for(done_event.wait(), timeout=UI_TIMEOUT)
         except Exception:
-            # Timeout - proceed with whatever was configured
-            LOGGER.info(f"Video Tool timeout for task {task_id}, proceeding...")
-            state["completed"] = True
+            if state.get("merge_intake"):
+                LOGGER.info(
+                    "Merge Tracks timed out for task %s; preserving original video",
+                    task_id,
+                )
+                state["cancelled"] = True
+            else:
+                LOGGER.info(f"Video Tool timeout for task {task_id}, proceeding...")
+                state["completed"] = True
 
         # If user cancelled (close), return original path
         if state.get("cancelled", False):
@@ -662,6 +865,13 @@ async def process_video_tool(listener, up_path):
         )
         return up_path
     finally:
+        preview_path = state.get("preview_path")
+        if preview_path and await aiopath.isfile(preview_path):
+            with suppress(Exception):
+                await remove(preview_path)
+        external_dir = state.get("external_dir")
+        if external_dir and await aiopath.isdir(external_dir):
+            await rmtree(external_dir, ignore_errors=True)
         _active_vt_sessions.pop(task_id, None)
         listener._vt_state = None
         listener._vt_msg = None
@@ -867,9 +1077,9 @@ async def _merge_video_directory(listener, root, videos):
             await remove(list_path)
 
 
-def _clone_state_for_path(source, filename, audio_tracks, sub_tracks):
+def _clone_state_for_path(source, filename, audio_tracks, sub_tracks, input_path=""):
     task_id = source["task_id"]
-    state = _base_state(task_id, filename, audio_tracks, sub_tracks)
+    state = _base_state(task_id, filename, audio_tracks, sub_tracks, input_path)
     audio_len = len(audio_tracks)
     sub_len = len(sub_tracks)
     for key in ("remove_audio", "extract_audio"):
@@ -907,7 +1117,10 @@ async def _process_vt_directory(listener, up_path, pre_state=None):
         )
         return up_path
 
-    if _video_merge_requested(listener, up_path, pre_state):
+    if (
+        _video_merge_requested(listener, up_path, pre_state)
+        or (getattr(listener, "manual_video_merge", False) and len(videos) >= 2)
+    ):
         return await _merge_video_directory(listener, up_path, videos)
 
     task_id = str(listener.mid)
@@ -974,7 +1187,7 @@ async def _process_vt_directory(listener, up_path, pre_state=None):
     for video in videos:
         audio_tracks, sub_tracks = await probe_streams(video)
         work_state = _clone_state_for_path(
-            state, ospath.basename(video), audio_tracks, sub_tracks
+            state, ospath.basename(video), audio_tracks, sub_tracks, video
         )
         await _refresh_external_tracks(work_state, video)
         await _execute_vt_pipeline(listener, video, work_state)
@@ -1063,13 +1276,13 @@ async def _execute_vt_pipeline(listener, input_path, state):
     for idx in state.get("merge_audio", []):
         for item in state.get("external_audio", []):
             if item["index"] == idx:
-                extra_inputs.append(("audio", item["path"]))
+                extra_inputs.append(("audio", item["path"], item))
                 cleanup_paths.append(item["path"])
 
     for idx in state.get("merge_sub", []):
         for item in state.get("external_sub", []):
             if item["index"] == idx:
-                extra_inputs.append(("sub", item["path"]))
+                extra_inputs.append(("sub", item["path"], item))
                 cleanup_paths.append(item["path"])
 
     if has_translate:
@@ -1083,7 +1296,7 @@ async def _execute_vt_pipeline(listener, input_path, state):
                     translated = await _translate_srt_file(
                         sub_path, target, listener.mid
                     )
-                    extra_inputs.append(("sub", translated))
+                    extra_inputs.append(("sub", translated, None))
                     cleanup_paths.extend([sub_path, translated])
                 except Exception as e:
                     LOGGER.warning(f"Subtitle translate failed: {e}")
@@ -1097,7 +1310,7 @@ async def _execute_vt_pipeline(listener, input_path, state):
     if has_intro:
         intro_path = await _create_intro_subtitle(listener, dir_path)
         if intro_path:
-            extra_inputs.insert(0, ("intro_sub", intro_path))
+            extra_inputs.insert(0, ("intro_sub", intro_path, None))
             cleanup_paths.append(intro_path)
 
     # If no mux operations needed, return original
@@ -1126,7 +1339,9 @@ async def _execute_vt_pipeline(listener, input_path, state):
         "-y", "-i", input_path,
     ]
 
-    for _, path in extra_inputs:
+    for kind, path, item in extra_inputs:
+        if kind == "audio" and item and item.get("delay_ms"):
+            cmd.extend(["-itsoffset", f"{int(item['delay_ms']) / 1000:.3f}"])
         cmd.extend(["-i", path])
 
     cmd.extend(["-map", "0:v"])
@@ -1157,7 +1372,7 @@ async def _execute_vt_pipeline(listener, input_path, state):
 
     # Intro subtitles are mapped before existing subtitle streams so they open first.
     intro_sub_count = 0
-    for input_idx, (kind, _) in enumerate(extra_inputs, start=1):
+    for input_idx, (kind, _, _) in enumerate(extra_inputs, start=1):
         if kind == "intro_sub":
             cmd.extend(["-map", f"{input_idx}:s?"])
             intro_sub_count += 1
@@ -1183,9 +1398,12 @@ async def _execute_vt_pipeline(listener, input_path, state):
     for idx in sub_keep:
         cmd.extend(["-map", f"0:s:{idx}"])
 
-    for input_idx, (kind, _) in enumerate(extra_inputs, start=1):
+    merged_audio = []
+    for input_idx, (kind, _, item) in enumerate(extra_inputs, start=1):
         if kind == "audio":
-            cmd.extend(["-map", f"{input_idx}:a?"])
+            stream_index = int((item or {}).get("stream_index", 0))
+            cmd.extend(["-map", f"{input_idx}:a:{stream_index}?"])
+            merged_audio.append(item or {})
         elif kind == "sub":
             cmd.extend(["-map", f"{input_idx}:s?"])
 
@@ -1205,6 +1423,16 @@ async def _execute_vt_pipeline(listener, input_path, state):
     if default_audio is not None and default_audio in audio_keep:
         out_idx = audio_keep.index(default_audio)
         cmd.extend([f"-disposition:a:{out_idx}", "default"])
+
+    for offset, item in enumerate(merged_audio, start=len(audio_keep)):
+        language = _normalize_language(item.get("language", "und"))
+        title = str(item.get("title") or item.get("name") or "External Audio")[:80]
+        cmd.extend(
+            [
+                f"-metadata:s:a:{offset}", f"language={language}",
+                f"-metadata:s:a:{offset}", f"title={title}",
+            ]
+        )
 
     if intro_sub_count:
         cmd.extend(["-disposition:s:0", "default", "-metadata:s:s:0", "title=Intro"])

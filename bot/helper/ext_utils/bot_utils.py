@@ -128,7 +128,7 @@ def compare_versions(v1, v2):
 
 def bt_selection_buttons(id_):
     gid = id_[:12] if len(id_) > 25 else id_
-    pin = "".join([n for n in id_ if n.isdigit()][:4])
+    pin = _selector_pin(id_)
     buttons = ButtonMaker()
     if Config.WEB_PINCODE:
         buttons.url_button("Select Files", f"{Config.BASE_URL}/app/files?gid={id_}")
@@ -140,6 +140,35 @@ def bt_selection_buttons(id_):
     buttons.data_button("Done Selecting", f"sel done {gid} {id_}")
     buttons.data_button("Cancel", f"sel cancel {gid}")
     return buttons.build_menu(2)
+
+
+def mega_selection_buttons(id_):
+    pin = _selector_pin(id_)
+    gid = id_
+    buttons = ButtonMaker()
+    base = f"{Config.BASE_URL}/app/files?gid={id_}&type=mega"
+    if Config.WEB_PINCODE:
+        buttons.url_button("Select MEGA Files", base)
+        buttons.data_button("Pincode", f"sel pin {gid} {pin}")
+    else:
+        buttons.url_button("Select MEGA Files", f"{base}&pin={pin}")
+    buttons.data_button("Done Selecting", f"sel done {gid} {id_}")
+    buttons.data_button("Cancel", f"sel cancel {gid}")
+    return buttons.build_menu(2)
+
+
+def _selector_pin(gid):
+    from hashlib import sha256
+    from hmac import new as hmac_new
+
+    bot_id = str(Config.BOT_TOKEN or "").split(":", 1)[0]
+    signature = hmac_new(
+        b"wzmlx_v3_pin_salt",
+        f"{gid}|{bot_id}".encode(),
+        sha256,
+    ).hexdigest()
+    digits = "".join(char for char in signature if char.isdigit())[:4]
+    return (digits + signature).ljust(4, "0")[:4]
 
 
 async def get_telegraph_list(telegraph_content):

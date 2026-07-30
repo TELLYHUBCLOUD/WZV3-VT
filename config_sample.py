@@ -79,6 +79,7 @@ GLOBAL_UPLOAD_BOT_TOKENS = ""  # owner/sudo global upload bot tokens, space sepa
 GLOBAL_UPLOAD_BOT_ENABLED = True
 GLOBAL_UPLOAD_BOT_MAX_ACTIVE = 1
 MAIN_BOT_FALLBACK_UPLOADS = 1
+PREMIUM_UPLOAD_WORKERS = 2  # premium user-session ceiling; safe profile reduces this to 1
 UPLOAD_QUEUE_ENABLED = True
 UPLOAD_MAX_ACTIVE_TOTAL = 0
 UPLOAD_SAFE_CPU_GUARD = True
@@ -97,9 +98,9 @@ FFMPEG_THREADS = 0  # 0 = auto from profile. Example: 2 or 3 for fixed low CPU.
 FFMPEG_CPU_CORES = ""  # empty = auto. Example: "0,1" to pin FFmpeg.
 TG_COPY_DELAY = 0.15  # delay between sequential dump -> user copies.
 TG_FLOOD_WAIT_MULTIPLIER = 1.1
-MAX_PARALLEL_TASKS = 4
-SAFE_CPU_PERCENT = 92
-SAFE_FREE_RAM_MB = 512
+MAX_PARALLEL_TASKS = 0  # 0 = safe profile decides (2 on a 2-vCPU/4-GB VPS)
+SAFE_CPU_PERCENT = 88
+SAFE_FREE_RAM_MB = 768
 
 # Aria2 max-speed but safe defaults. Direct downloads use more connections,
 # while torrent upload bandwidth is capped so Telegram uploads stay fast.
@@ -110,7 +111,8 @@ ARIA2_MAX_CONCURRENT_DOWNLOADS = 4
 ARIA2_MAX_OVERALL_DOWNLOAD_LIMIT = "0"
 ARIA2_MAX_OVERALL_UPLOAD_LIMIT = "1M"
 QBIT_UPLOAD_LIMIT = 1048576
-STATUS_THEME = "starfall"  # classic, starfall, compact
+BOT_THEME = "starfall_neo"  # starfall_neo, classic
+STATUS_THEME = "starfall"  # legacy fallback
 
 # Create Torrent release pack
 CTORRENT_STORAGE_DIR = "/usr/src/app/torrents/seeding"
@@ -371,7 +373,7 @@ TMV_SITE = ""
 TMV_DUMP_CHAT = ""
 TMV_AUTO_LEECH = False
 TMV_CATEGORY = "tamil"
-TMV_LAST_LINK = ""
+TMV_SEEN_ITEMS = ""  # internal persisted URL/infohash deduplication
 
 # Torrent Search
 SEARCH_API_LINK = ""

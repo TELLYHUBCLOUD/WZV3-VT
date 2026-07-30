@@ -45,8 +45,51 @@ from ..helper.telegram_helper.message_utils import edit_message, send_message
 from .batch_task_registry import BatchTaskController
 
 _RUN_LOCK = Lock()
+_ACTIVE_RUNS = {}
 _QUALITY_TIMEOUT = 45 * 60
 _INVALID_FILENAME = r'[\\/:*?"<>|]'
+
+
+async def _wait_until_resumed(pause_event, cancel_event):
+    while not pause_event.is_set() and not cancel_event.is_set():
+        resumed = create_task(pause_event.wait())
+        cancelled = create_task(cancel_event.wait())
+        done, pending = await wait(
+            (resumed, cancelled), return_when=FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        await gather(*pending, return_exceptions=True)
+        if cancelled in done:
+            return False
+    return not cancel_event.is_set()
+
+
+async def hstream_pause(_, message):
+    gid = (message.text or "").split(maxsplit=1)
+    gid = gid[1].strip() if len(gid) > 1 else ""
+    state = _ACTIVE_RUNS.get(gid)
+    if not state:
+        await send_message(message, "Hstream task not found.")
+        return
+    state["pause"].clear()
+    state["paused"] = True
+    await send_message(
+        message,
+        "⏸ <b>Hstream paused.</b> The current FFmpeg/download step may finish before it rests.",
+    )
+
+
+async def hstream_resume(_, message):
+    gid = (message.text or "").split(maxsplit=1)
+    gid = gid[1].strip() if len(gid) > 1 else ""
+    state = _ACTIVE_RUNS.get(gid)
+    if not state:
+        await send_message(message, "Hstream task not found.")
+        return
+    state["paused"] = False
+    state["pause"].set()
+    await send_message(message, "▶️ <b>Hstream resumed.</b>")
 
 
 def _parse_destination(message, tokens):
@@ -927,6 +970,13 @@ async def hstream_letter_leech(_, message):
     async with _RUN_LOCK:
         controller = BatchTaskController("hsll", message)
         cancel_event = Event()
+        pause_event = Event()
+        pause_event.set()
+        _ACTIVE_RUNS[controller.gid] = {
+            "pause": pause_event,
+            "cancel": cancel_event,
+            "paused": False,
+        }
         processes = set()
         prepare_tasks = set()
         translator = None
@@ -962,12 +1012,19 @@ async def hstream_letter_leech(_, message):
                 )
                 return
             cancel_cmd = f"/{BotCommands.CancelTaskCommand[1]}_{controller.gid}"
+            pause_cmd = f"/hspause{Config.CMD_SUFFIX} {controller.gid}"
+            resume_cmd = f"/hsresume{Config.CMD_SUFFIX} {controller.gid}"
+            controls = (
+                f"Pause: <code>{pause_cmd}</code> | "
+                f"Resume: <code>{resume_cmd}</code>\n"
+                f"Stop: <code>{cancel_cmd}</code>"
+            )
             status = await send_message(
                 message,
                 (
                     f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
                     "Waiting for current bot and RSS tasks to finish.\n"
-                    f"Stop: <code>{cancel_cmd}</code>"
+                    + controls
                 ),
             )
             last_waiting = None
@@ -985,7 +1042,7 @@ async def hstream_letter_leech(_, message):
                             f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
                             f"Waiting: <code>{normal_count}</code> normal | "
                             f"<code>{rss_count}</code> RSS/TMV task(s)\n"
-                            f"Stop: <code>{cancel_cmd}</code>"
+                            + controls
                         ),
                     )
 
@@ -1021,12 +1078,14 @@ async def hstream_letter_leech(_, message):
                         f"Episodes: <code>{len(items)}</code>\n"
                         "Pipeline: <code>1 episode / sequential qualities</code>\n"
                         f"Tamil: <code>{'ready' if translator else 'ESub fallback'}</code>\n"
-                        f"Stop: <code>{cancel_cmd}</code>"
+                        + controls
                     ),
                 )
 
                 for index, item in enumerate(items):
                     if cancel_event.is_set():
+                        break
+                    if not await _wait_until_resumed(pause_event, cancel_event):
                         break
                     task = create_task(
                         _prepare_episode(
@@ -1057,6 +1116,8 @@ async def hstream_letter_leech(_, message):
                         prepared = None
                         failed += 1
                     if prepared:
+                        if not await _wait_until_resumed(pause_event, cancel_event):
+                            break
                         try:
                             uploaded += await _upload_episode(
                                 prepared, destination, thread_id, cancel_event
@@ -1081,7 +1142,8 @@ async def hstream_letter_leech(_, message):
                                     f"<b>Hstream letter {escape(tokens[1].upper())}</b>\n"
                                     f"Progress: <code>{index + 1}/{len(items)}</code>\n"
                                     f"Uploaded: <code>{uploaded}</code> | Failed: <code>{failed}</code>\n"
-                                    f"Stop: <code>{cancel_cmd}</code>"
+                                    f"State: <code>{'paused' if not pause_event.is_set() else 'running'}</code>\n"
+                                    f"{controls}"
                                 ),
                             )
             if status:
@@ -1115,4 +1177,5 @@ async def hstream_letter_leech(_, message):
             if maintenance_acquired:
                 await hstream_maintenance.release()
             await sync_to_async(rmtree, root, ignore_errors=True)
+            _ACTIVE_RUNS.pop(controller.gid, None)
             controller.close()

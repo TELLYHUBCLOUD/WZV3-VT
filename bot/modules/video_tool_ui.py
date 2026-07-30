@@ -5,6 +5,8 @@ from .. import LOGGER
 from ..core.config_manager import Config
 from ..helper.video_utils.video_tools import (
     UI_TIMEOUT,
+    finish_merge_track_intake,
+    generate_merge_preview,
     get_vt_event,
     get_vt_state,
     start_merge_track_intake,
@@ -68,6 +70,79 @@ def _track_text(track):
     if "name" in track:
         return track["name"]
     return f"Track {track['index'] + 1} - {str(track.get('lang', 'unk')).upper()} ({track.get('codec', '')})"
+
+
+async def render_merge_intake(vt_msg, state):
+    task_id = state["task_id"]
+    audio = state.get("external_audio", [])
+    subtitles = state.get("external_sub", [])
+    lines = [
+        "<b>Merge Tracks</b>",
+        "",
+        "Send audio, subtitle, or video files to this chat.",
+        "Muxing starts only after Done.",
+        f"Audio: <b>{len(audio)}</b> | Subtitles: <b>{len(subtitles)}</b>",
+    ]
+    if state.get("merge_idle"):
+        lines.append("\nIntake is idle; new files are still accepted.")
+    rows = []
+    for item in audio:
+        selected = item["index"] in state.get("merge_audio", [])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    f"{_selected_icon(selected)}A{item['index'] + 1}: {item.get('language', 'und')} | {item.get('delay_ms', 0)} ms",
+                    callback_data=f"vt_mergecfg_{item['index']}_{task_id}",
+                    style=_state_style(selected),
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton("Preview 60s", callback_data=f"vt_preview_{task_id}")],
+            [
+                InlineKeyboardButton("🟢 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
+                InlineKeyboardButton("Back", callback_data=f"vt_main_{task_id}"),
+            ],
+        ]
+    )
+    await vt_msg.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def render_merge_audio_config(query, state, index):
+    item = next(
+        (entry for entry in state.get("external_audio", []) if entry["index"] == index),
+        None,
+    )
+    if not item:
+        await query.answer("Audio track no longer exists.", show_alert=True)
+        return
+    task_id = state["task_id"]
+    selected = index in state.get("merge_audio", [])
+    text = (
+        "<b>External Audio Settings</b>\n\n"
+        f"<b>Track:</b> <code>{item['name']}</code>\n"
+        f"<b>Language:</b> <code>{item.get('language', 'und')}</code>\n"
+        f"<b>Delay:</b> <code>{item.get('delay_ms', 0)} ms</code>\n"
+        f"<b>Title:</b> <code>{item.get('title', '')}</code>\n\n"
+        "Delay accepts signed integer milliseconds only."
+    )
+    rows = [
+        [
+            InlineKeyboardButton("Language", callback_data=f"vt_mergefield_language_{index}_{task_id}"),
+            InlineKeyboardButton("Delay (ms)", callback_data=f"vt_mergefield_delay_ms_{index}_{task_id}"),
+        ],
+        [InlineKeyboardButton("Track Title", callback_data=f"vt_mergefield_title_{index}_{task_id}")],
+        [
+            InlineKeyboardButton(
+                "🟢 Included" if selected else "🔴 Excluded",
+                callback_data=f"vt_mergetoggle_{index}_{task_id}",
+                style=_state_style(selected) if selected else _btn_style(ButtonStyle.DANGER),
+            )
+        ],
+        [InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}")],
+    ]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def render_video_tools_main(vt_msg, state):
@@ -258,6 +333,10 @@ async def video_tools_callback(_, query):
         await query.answer("This task is already executed!", show_alert=True)
         return
 
+    if state.get("busy"):
+        await query.answer("Please wait for the current probe/preview/mux step.", show_alert=True)
+        return
+
     await query.answer()
 
     try:
@@ -269,8 +348,15 @@ async def video_tools_callback(_, query):
             return
 
         if action == "done":
-            state["completed"] = True
-            event.set()
+            if state.get("merge_intake"):
+                try:
+                    finish_merge_track_intake(state, event)
+                except ValueError as error:
+                    await query.answer(str(error), show_alert=True)
+                    return
+            else:
+                state["completed"] = True
+                event.set()
             await query.message.edit_text("<b>Video Tools configuration saved.</b> Processing...")
             return
 
@@ -314,6 +400,55 @@ async def video_tools_callback(_, query):
                 await query.answer("Extract Stream cannot be combined with Merge Tracks.", show_alert=True)
                 return
             await start_merge_track_intake(query.message, state, event)
+            await render_merge_intake(query.message, state)
+            return
+
+        if action == "mergeback":
+            await render_merge_intake(query.message, state)
+            return
+
+        if action == "mergecfg":
+            await render_merge_audio_config(query, state, int(parts[2]))
+            return
+
+        if action == "mergetoggle":
+            index = int(parts[2])
+            selected = state.setdefault("merge_audio", [])
+            if index in selected:
+                selected.remove(index)
+            else:
+                selected.append(index)
+            state["preview_stale"] = True
+            await render_merge_audio_config(query, state, index)
+            return
+
+        if action == "mergefield":
+            index = int(parts[-2])
+            field = "_".join(parts[2:-2])
+            if field not in {"language", "delay_ms", "title"}:
+                await query.answer("Invalid merge setting.", show_alert=True)
+                return
+            state["awaiting_input"] = (field, index)
+            prompt = {
+                "language": "Send the language name or ISO code, for example <code>Tamil</code> or <code>tam</code>.",
+                "delay_ms": "Send a signed integer delay in milliseconds, for example <code>-250</code> or <code>1200</code>.",
+                "title": "Send the Telegram/MKV audio track title.",
+            }[field]
+            await query.message.reply_text(prompt)
+            return
+
+        if action == "preview":
+            await query.message.edit_text("<b>Generating the 60-second middle preview...</b>")
+            try:
+                await generate_merge_preview(state)
+                await render_merge_intake(query.message, state)
+            except Exception as error:
+                await query.message.edit_text(
+                    f"<b>Preview failed:</b> <code>{str(error)[:400]}</code>",
+                    reply_markup=InlineKeyboardMarkup(
+                        [[InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}")]]
+                    ),
+                )
             return
 
         if action == "translate":

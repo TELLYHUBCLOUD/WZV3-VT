@@ -39,6 +39,10 @@ You can use this arg also to move multiple links/torrents contents to the same d
 /cmd -i 10(number of links/files) -m folder name (all links contents in one folder)
 /cmd -b -m folder name (reply to batch of message/file(each link on new line))
 
+Bare <code>-m</code> has media-aware behavior:
+/cmd link -m (one video: open Manual Merge Tracks)
+/cmd -i 10 -m (multiple videos: concatenate in order)
+
 While using bulk you can also use this arg with different folder name along with the links in message or file batch
 Example:
 link1 -m folder1

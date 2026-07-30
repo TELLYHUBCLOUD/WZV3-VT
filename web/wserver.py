@@ -34,7 +34,12 @@ from fastapi.templating import Jinja2Templates
 from sabnzbdapi import SabnzbdClient
 from aioqbt.exc import AQError
 
-from web.nodes import extract_file_ids, make_tree
+from web.nodes import extract_file_ids, make_mega_tree, make_tree
+from web.mega_selection_store import (
+    cleanup_stale_states as cleanup_mega_states,
+    read_state as read_mega_state,
+    update_selected_ids as update_mega_selected_ids,
+)
 from aiohttp import ClientSession
 
 getLogger("httpx").setLevel(WARNING)
@@ -243,6 +248,46 @@ async def files(request: Request):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@app.api_route(
+    "/app/files/mega", methods=["GET", "POST"], response_class=HTMLResponse
+)
+async def handle_mega(request: Request):
+    params = request.query_params
+    gid_raw = params.get("gid", "")
+    pin = params.get("pin", "")
+    if not gid_raw.startswith("mega_"):
+        return JSONResponse(
+            {"files": [], "engine": "", "error": "Invalid GID", "message": "Invalid MEGA task"},
+            status_code=400,
+        )
+    gid = gid_raw[5:]
+    if not _SAFE_GID.match(gid) or not _verify_pin(gid_raw, pin):
+        return JSONResponse(
+            {"files": [], "engine": "", "error": "Invalid pin", "message": "The PIN is incorrect"},
+            status_code=403,
+        )
+    cleanup_mega_states()
+    state = read_mega_state(gid)
+    if state is None:
+        return JSONResponse(
+            {"files": [], "engine": "", "error": "Expired", "message": "MEGA selection expired"},
+            status_code=404,
+        )
+    if request.method == "POST":
+        selected, _ = extract_file_ids(await request.json())
+        ok = update_mega_selected_ids(gid, selected)
+        return JSONResponse(
+            {
+                "files": [],
+                "engine": "mega",
+                "error": "" if ok else "Expired",
+                "message": "Selection submitted" if ok else "MEGA selection expired",
+            },
+            status_code=200 if ok else 404,
+        )
+    return JSONResponse(make_mega_tree(state.get("file_list", [])))
 
 
 @app.get("/mxplayer")

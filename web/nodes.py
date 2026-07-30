@@ -158,6 +158,42 @@ def make_tree(res, tool, root_path=""):
     return {"files": result, "engine": tool}
 
 
+def make_mega_tree(file_list):
+    """Build the same selector tree shape used by qB from MEGA metadata."""
+    parent = TorNode("MEGA")
+    folder_id = 0
+    path_to_node = {"": parent}
+    folders = sorted(
+        (item for item in file_list if item.get("is_dir")),
+        key=lambda item: str(item.get("path", "")).count("/"),
+    )
+    for item in folders:
+        prefix = str(item.get("path", "")).strip("/")
+        full_path = "/".join(filter(None, (prefix, item.get("name", ""))))
+        parent_node = path_to_node.get(prefix, parent)
+        path_to_node[full_path] = TorNode(
+            item.get("name") or "Folder",
+            is_folder=True,
+            parent=parent_node,
+            file_id=f"mega_folder_{folder_id}",
+        )
+        folder_id += 1
+    for item in file_list:
+        if item.get("is_dir"):
+            continue
+        prefix = str(item.get("path", "")).strip("/")
+        TorNode(
+            item.get("name") or "File",
+            is_file=True,
+            parent=path_to_node.get(prefix, parent),
+            size=int(item.get("size") or 0),
+            priority=1,
+            file_id=str(item.get("id")),
+            progress=0,
+        )
+    return {"files": create_list(parent), "engine": "mega"}
+
+
 """
 def print_tree(parent):
     for pre, _, node in RenderTree(parent):

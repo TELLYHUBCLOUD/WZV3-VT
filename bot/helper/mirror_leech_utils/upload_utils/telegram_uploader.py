@@ -35,7 +35,11 @@ from ....core.config_manager import Config
 from ....core.tg_client import TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
-from ...ext_utils.performance import get_tg_copy_delay, get_tg_flood_wait_multiplier
+from ...ext_utils.performance import (
+    get_premium_upload_workers,
+    get_tg_copy_delay,
+    get_tg_flood_wait_multiplier,
+)
 from ...ext_utils.starfallx_upload import (
     private_dump_only,
     starfallx_upload,
@@ -97,6 +101,9 @@ class TelegramUploader:
         self._active_route = None
         self._private_dump_only = False
         self._private_dump_warned = False
+        self._premium_workers = (
+            get_premium_upload_workers() if self._user_session else 1
+        )
 
     async def _upload_progress(self, current, _):
         if self._listener.is_cancelled:

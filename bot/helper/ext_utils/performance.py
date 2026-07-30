@@ -26,7 +26,7 @@ def get_performance_profile():
         return profile
     cpu_total = max(1, cpu_count() or 1)
     ram_mb = virtual_memory().total // (1024 * 1024)
-    if cpu_total <= 2 or ram_mb <= 3072:
+    if cpu_total <= 2 or ram_mb <= 4096:
         return "safe"
     if cpu_total <= 4 or ram_mb <= 6144:
         return "balanced"
@@ -67,7 +67,8 @@ def get_tg_flood_wait_multiplier():
 def get_max_parallel_tasks():
     configured = _safe_int(getattr(Config, "MAX_PARALLEL_TASKS", 0))
     if configured > 0:
-        return configured
+        profile_cap = {"safe": 2, "balanced": 3}.get(get_performance_profile())
+        return min(configured, profile_cap) if profile_cap else configured
 
     profile = get_performance_profile()
     if profile == "safe":
@@ -75,6 +76,19 @@ def get_max_parallel_tasks():
     if profile == "balanced":
         return 3
     return 4
+
+
+def get_premium_upload_workers():
+    configured = max(
+        1,
+        min(3, _safe_int(getattr(Config, "PREMIUM_UPLOAD_WORKERS", 2), 2)),
+    )
+    profile = get_performance_profile()
+    if profile == "safe":
+        return 1
+    if profile == "balanced":
+        return min(configured, 2)
+    return configured
 
 
 def get_safe_cpu_percent():

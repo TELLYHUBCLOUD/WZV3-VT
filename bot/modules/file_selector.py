@@ -1,5 +1,5 @@
 from aiofiles.os import remove, path as aiopath
-from asyncio import iscoroutinefunction
+from asyncio import create_task, iscoroutinefunction
 
 from .. import (
     task_dict,
@@ -114,6 +114,35 @@ async def confirm_selection(_, query):
     user_id = query.from_user.id
     data = query.data.split()
     message = query.message
+    if len(data) < 3:
+        await query.answer("Malformed selection request", show_alert=True)
+        return
+    if data[2].startswith("mega_"):
+        from ..helper.mirror_leech_utils.download_utils.mega_download import (
+            cancel_mega_selection,
+            get_mega_selection_owner_id,
+            resume_mega_with_selection,
+        )
+
+        real_gid = data[2][5:]
+        owner_id = get_mega_selection_owner_id(real_gid)
+        if owner_id is None:
+            await query.answer("This MEGA selection expired", show_alert=True)
+            await delete_message(message)
+            return
+        if user_id != owner_id:
+            await query.answer("This task is not for you!", show_alert=True)
+            return
+        if data[1] == "pin":
+            await query.answer(data[3] if len(data) > 3 else "", show_alert=True)
+            return
+        await query.answer()
+        if data[1] == "done":
+            create_task(resume_mega_with_selection(real_gid))
+        else:
+            await cancel_mega_selection(real_gid)
+        await delete_message(message)
+        return
     task = await get_task_by_gid(data[2])
     if task is None:
         await query.answer("This task has been cancelled!", show_alert=True)

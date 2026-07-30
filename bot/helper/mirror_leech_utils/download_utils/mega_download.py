@@ -1,7 +1,8 @@
 import os
-from asyncio import Lock as AsyncLock, sleep as asleep
+from asyncio import Lock as AsyncLock, create_task, sleep as asleep
 from contextlib import suppress
 from secrets import token_hex
+from time import time
 
 from aiofiles.os import makedirs
 
@@ -10,10 +11,12 @@ from ....core.config_manager import Config
 from ...ext_utils.mega_compat import (
     MegaApi,
     MegaCancelToken,
+    MegaStringList,
     MegaSdkUnavailable,
     ensure_mega_sdk,
 )
-from ...telegram_helper.message_utils import send_status_message
+from ...telegram_helper.message_utils import send_message, send_status_message
+from ...ext_utils.bot_utils import mega_selection_buttons, sync_to_async
 from ...ext_utils.task_manager import (
     check_running_tasks,
     limit_checker,
@@ -34,6 +37,14 @@ from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 
 _ACTIVE_MEGA_LINKS = set()
 _ACTIVE_MEGA_LINKS_LOCK = AsyncLock()
+_MEGA_SELECTIONS = {}
+_MEGA_SELECTION_TTL = 30 * 60
+
+from web.mega_selection_store import (
+    delete_state as _delete_selection,
+    read_state as _read_selection,
+    write_state as _write_selection,
+)
 
 _MEGA_BASE64_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -108,12 +119,170 @@ async def _release_link(link: str):
         _ACTIVE_MEGA_LINKS.discard(link)
 
 
+def _safe_node_name(name):
+    return "".join("_" if char in '/\\\0:*?\"<>|' else char for char in str(name or "unnamed")).strip() or "unnamed"
+
+
+def _walk_mega_tree(api, root):
+    entries = []
+    stack = [(root, "")]
+    while stack:
+        parent, prefix = stack.pop()
+        children = api.getChildren(parent)
+        if not children:
+            continue
+        local = [children.get(index) for index in range(children.size())]
+        for child in local:
+            name = _safe_node_name(child.getName())
+            is_dir = bool(child.isFolder()) or child.getType() == 1
+            handle = str(child.getHandle())
+            handle_b64 = MegaApi.handleToBase64(child.getHandle())
+            entries.append(
+                {
+                    "name": name,
+                    "size": 0 if is_dir else max(0, int(child.getSize() or 0)),
+                    "path": prefix,
+                    "id": handle,
+                    "handle_b64": handle_b64,
+                    "is_dir": is_dir,
+                }
+            )
+            if is_dir:
+                stack.append((child, f"{prefix}{name}/"))
+    return entries
+
+
+def get_mega_selection_owner_id(gid):
+    state = _MEGA_SELECTIONS.get(gid)
+    return getattr(state.get("listener"), "user_id", None) if state else None
+
+
+async def _close_selection_state(state):
+    if not state:
+        return
+    async_api = state.get("async_api")
+    if async_api is not None:
+        async with _MEGA_SDK_LOCK:
+            with suppress(Exception):
+                await async_api.logout()
+            folder_api = state.get("folder_api")
+            folder_listener = state.get("dl_listener")
+            if folder_api is not None and folder_listener is not None:
+                with suppress(Exception):
+                    folder_api.removeListener(folder_listener)
+            api = getattr(async_api, "api", None)
+            mega_listener = getattr(async_api, "_mega_listener", None)
+            if api is not None and mega_listener is not None:
+                with suppress(Exception):
+                    api.removeListener(mega_listener)
+    await _release_link(state["listener"].link)
+    await clean_download(state.get("mega_base", ""))
+
+
+async def _expire_mega_selection(gid):
+    await asleep(_MEGA_SELECTION_TTL)
+    state = _MEGA_SELECTIONS.pop(gid, None)
+    if state is None:
+        return
+    _delete_selection(gid)
+    listener = state["listener"]
+    if not listener.is_cancelled:
+        listener.is_cancelled = True
+        await listener.on_download_error("MEGA file selection timed out")
+    await _close_selection_state(state)
+
+
+async def cancel_mega_selection(gid):
+    state = _MEGA_SELECTIONS.pop(gid, None)
+    _delete_selection(gid)
+    if state:
+        state["listener"].is_cancelled = True
+        await state["listener"].on_download_error("MEGA selection cancelled by user")
+        await _close_selection_state(state)
+
+
+async def resume_mega_with_selection(gid):
+    state = _MEGA_SELECTIONS.pop(gid, None)
+    stored = _read_selection(gid)
+    _delete_selection(gid)
+    if not state or not stored:
+        return False
+    listener = state["listener"]
+    api = state["folder_api"]
+    async_api = state["async_api"]
+    dl_listener = state["dl_listener"]
+    selected = set(stored.get("selected_ids") or [])
+    entries = [item for item in state["entries"] if not item["is_dir"] and item["id"] in selected]
+    try:
+        if not entries:
+            await listener.on_download_error("No MEGA files selected")
+            return False
+        listener.size = sum(item["size"] for item in entries)
+        msg, button = await stop_duplicate_check(listener)
+        if msg:
+            await listener.on_download_error(msg, button)
+            return False
+        if error := await limit_checker(listener):
+            await listener.on_download_error(error, is_limit=True)
+            return False
+        filters = MegaStringList.createInstance()
+        if filters is None:
+            await listener.on_download_error("This MEGA SDK build does not support folder selection")
+            return False
+        for item in entries:
+            filters.add(item["handle_b64"])
+        await sync_to_async(api.setFolderDownloadFilter, filters)
+        dl_listener._caller_manages_completion = True
+        dl_listener._cancel_token = _make_cancel_token()
+        dl_listener._selection_cleanup = None
+        async_api._download_is_folder = True
+        added_to_queue, event = await check_running_tasks(listener)
+        if added_to_queue:
+            async with task_dict_lock:
+                task_dict[listener.mid] = QueueStatus(listener, gid, "dl")
+            await listener.on_download_start()
+            if listener.multi <= 1:
+                await send_status_message(listener.message)
+            await event.wait()
+            if listener.is_cancelled:
+                return False
+        async with task_dict_lock:
+            task_dict[listener.mid] = MegaDownloadStatus(listener, dl_listener, gid, "dl")
+        if not added_to_queue:
+            await listener.on_download_start()
+            if listener.multi <= 1:
+                await send_status_message(listener.message)
+        download_path = os.path.join(state["path"], listener.name)
+        await makedirs(download_path, exist_ok=True)
+        await async_api.startDownload(
+            state["node"], download_path, listener.name, None, False,
+            dl_listener._cancel_token, 3, 2, False,
+        )
+        await async_api.wait_for_transfer()
+        with suppress(Exception):
+            await sync_to_async(api.clearFolderDownloadFilter)
+        if not listener.is_cancelled and not dl_listener.is_cancelled:
+            if dl_listener.error:
+                await listener.on_download_error(_mega_error_format(dl_listener.error))
+            else:
+                await listener.on_download_complete()
+        return True
+    except Exception as error:
+        LOGGER.error("MEGA selected download failed: %s", error, exc_info=True)
+        if not listener.is_cancelled:
+            await listener.on_download_error(f"MEGA selected download failed: {error}")
+        return False
+    finally:
+        await _close_selection_state(state)
+
+
 async def add_mega_download(listener, path):
     if Config.DISABLE_MEGA:
         await listener.on_download_error(
             "Mega Link downloads are currently disabled by the Bot Owner."
         )
         return
+    handoff = False
     try:
         ensure_mega_sdk()
     except MegaSdkUnavailable as e:
@@ -246,6 +415,43 @@ async def add_mega_download(listener, path):
             except Exception:
                 pass
         gid = token_hex(5)
+
+        if listener.select and is_folder:
+            if not Config.BASE_URL:
+                await listener.on_download_error("BASE_URL is required for MEGA file selection")
+                return
+            entries = await sync_to_async(_walk_mega_tree, folder_api, node)
+            if not any(not item["is_dir"] for item in entries):
+                await listener.on_download_error("MEGA folder contains no files")
+                return
+            public_gid = f"mega_{gid}"
+            metadata = entries
+            if not _write_selection(gid, metadata, []):
+                await listener.on_download_error("Failed to create MEGA selection state")
+                return
+            _MEGA_SELECTIONS[gid] = {
+                "listener": listener,
+                "async_api": async_api,
+                "folder_api": folder_api,
+                "dl_listener": dl_listener,
+                "entries": entries,
+                "node": node,
+                "path": path,
+                "mega_base": mega_base,
+                "created_at": time(),
+            }
+            dl_listener._selection_cleanup = lambda: cancel_mega_selection(gid)
+            create_task(_expire_mega_selection(gid))
+            listener.size = sum(item["size"] for item in entries if not item["is_dir"])
+            async with task_dict_lock:
+                task_dict[listener.mid] = MegaDownloadStatus(listener, dl_listener, public_gid, "dl")
+            await send_message(
+                listener.message,
+                "<b>MEGA folder ready.</b> Select files, submit the page, then press Done Selecting.",
+                mega_selection_buttons(public_gid),
+            )
+            handoff = True
+            return
         msg, button = await stop_duplicate_check(listener)
         if msg:
             await listener.on_download_error(msg, button)
@@ -343,5 +549,6 @@ async def add_mega_download(listener, path):
                             async_api.folder_api.removeListener(
                                 async_api._folder_listener
                             )
-        await _release_link(listener.link)
-        await clean_download(mega_base)
+        if not handoff:
+            await _release_link(listener.link)
+            await clean_download(mega_base)

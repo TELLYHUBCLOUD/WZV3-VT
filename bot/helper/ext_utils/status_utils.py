@@ -220,7 +220,7 @@ def speed_string_to_bytes(size_text: str):
     return int(size)
 
 
-def get_progress_bar_string(pct):
+def _legacy_progress_bar_string(pct):
     pct = float(str(pct).strip("%"))
     p = min(max(pct, 0), 100)
     cFull = int(p // 8)
@@ -228,14 +228,37 @@ def get_progress_bar_string(pct):
     p_str += "⬡" * (12 - cFull)
     return f"[{p_str}]"
 
-def get_progress_bar_string(pct):
+def _legacy_square_progress_bar_string(pct):
     pct = float(str(pct).strip("%"))
     p = min(max(pct, 0), 100)
     full = int(p // 8)
     return f"[{'■' * full}{'□' * (12 - full)}]"
 
 
-async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=1):
+def get_progress_bar_string(pct):
+    try:
+        pct = float(str(pct).strip("%"))
+    except (TypeError, ValueError):
+        pct = 0
+    progress = min(max(pct, 0), 100)
+    full = int(progress // 8)
+    return f"[{'■' * full}{'□' * (12 - full)}]"
+
+
+def _compact_task_name(name, limit=90):
+    name = " ".join(str(name or "Unnamed task").split())
+    return name if len(name) <= limit else f"{name[: limit - 1]}…"
+
+
+def _status_theme():
+    return str(
+        getattr(Config, "BOT_THEME", "")
+        or getattr(Config, "STATUS_THEME", "")
+        or "starfall_neo"
+    ).lower()
+
+
+async def _get_readable_message_legacy(sid, is_user, page_no=1, status="All", page_step=1):
     msg = ""
     button = None
 
@@ -262,7 +285,8 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
         else:
             tstatus = task.status()
         msg += f"<b>{index + start_position}.</b> "
-        msg += f"<b><i>{escape(f'{task.name()}')}</i></b>"
+        task_name = escape(_compact_task_name(task.name()))
+        msg += f"<b><i>{task_name}</i></b>"
         if task.listener.subname:
             msg += f"\n┖ <b>Sub Name</b> → <i>{task.listener.subname}</i>"
         elapsed = time() - task.listener.message.date.timestamp()
@@ -327,11 +351,9 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             msg = f"No Active {status} Tasks!\n\n"
 
     msg += "⌬ <b><u>Bot Stats</u></b>"
-    theme = str(Config.STATUS_THEME or "starfall").lower()
-    if theme == "compact":
-        msg = msg.replace("Bot Stats", "Bot Stats")
-    elif theme == "starfall":
-        msg = msg.replace("Bot Stats", "Starfall Status")
+    theme = _status_theme()
+    if theme in {"starfall", "starfall_neo", "neo", "neo_minimal"}:
+        msg = msg.replace("Bot Stats", "Starfall NEO Status")
     buttons = ButtonMaker()
     if not is_user:
         buttons.data_button("\U0001F4DC TStats", f"status {sid} ov", position="header", style=ButtonStyle.PRIMARY)
@@ -378,3 +400,119 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
     for bad, good in cleanup.items():
         msg = msg.replace(bad, good)
     return msg, button
+
+
+async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=1):
+    if _status_theme() not in {"starfall_neo", "neo", "neo_minimal"}:
+        return await _get_readable_message_legacy(
+            sid, is_user, page_no, status, page_step
+        )
+
+    from ..telegram_helper.bot_commands import BotCommands
+
+    tasks = await get_specific_tasks(status, sid if is_user else None)
+    if not tasks and status == "All":
+        return None, None
+
+    limit = max(1, int(Config.STATUS_LIMIT or 10))
+    task_count = len(tasks)
+    pages = max(1, (task_count + limit - 1) // limit)
+    page_no = ((page_no - 1) % pages) + 1
+    if sid in status_dict:
+        status_dict[sid]["page_no"] = page_no
+    start = (page_no - 1) * limit
+    chunks = []
+
+    for number, task in enumerate(tasks[start : start + limit], start=start + 1):
+        task_status = (
+            await task.status()
+            if iscoroutinefunction(task.status)
+            else task.status()
+        )
+        name = escape(_compact_task_name(task.name(), 76))
+        progress = task.progress() if getattr(task.listener, "progress", False) else "0%"
+        elapsed = get_readable_time(
+            time() - task.listener.message.date.timestamp()
+        ) or "0s"
+        owner = task.listener.message.from_user
+        owner_name = owner.mention(style="html") if owner else "Unknown"
+        lines = [
+            f"<b>{number}. {name}</b>",
+            f"👤 {owner_name}  <code>#ID{getattr(owner, 'id', 0)}</code>",
+        ]
+        if task_status not in {
+            MirrorStatus.STATUS_SEED,
+            MirrorStatus.STATUS_QUEUEUP,
+        } and getattr(task.listener, "progress", False):
+            lines.extend(
+                (
+                    f"{get_progress_bar_string(progress)} <b>{progress}</b>",
+                    f"📦 <b>{task.processed_bytes()}</b> / {task.size()}",
+                    f"⚡ {task.speed()}  •  ⏳ {task.eta()}",
+                )
+            )
+        elif task_status == MirrorStatus.STATUS_SEED:
+            lines.extend(
+                (
+                    f"📦 {task.size()}  •  ↑ {task.uploaded_bytes()}",
+                    f"🌱 {task.seed_speed()}  •  Ratio {task.ratio()}",
+                )
+            )
+        else:
+            lines.append(f"📦 {task.size()}")
+        lines.append(
+            f"🔹 <b>{task_status}</b>  •  {task.engine}  •  {elapsed}"
+        )
+        lines.append(
+            f"🛑 <code>/{BotCommands.CancelTaskCommand[1]}_{task.gid()}</code>"
+        )
+        chunks.append("\n".join(lines))
+
+    if not chunks:
+        chunks.append(f"No active <b>{escape(str(status))}</b> tasks.")
+
+    disk = disk_usage(DOWNLOAD_DIR)
+    active = len(non_queued_dl) + len(non_queued_up)
+    queued = len(queued_dl) + len(queued_up)
+    footer = [
+        "<b>✨ Starfall NEO</b>",
+        f"🧠 CPU {cpu_percent()}%  •  RAM {virtual_memory().percent}%",
+        f"💾 Free {get_readable_file_size(disk.free)} ({round(100 - disk.percent, 1)}%)",
+        f"🚦 Active {active}  •  Queued {queued}  •  Uptime {get_readable_time(time() - bot_start_time)}",
+    ]
+    try:
+        from .starfallx_upload import starfallx_upload
+
+        summary = starfallx_upload.status_summary()
+        footer.append(
+            "🚀 Uploaders "
+            f"{summary['helper_active']} active  •  {summary.get('ready', 0)} ready  •  "
+            f"{summary['cooling']} cooling"
+        )
+    except Exception:
+        pass
+    if pages > 1:
+        footer.append(f"📄 Page {page_no}/{pages}  •  {task_count} tasks")
+
+    buttons = ButtonMaker()
+    if not is_user:
+        buttons.data_button(
+            "📊 TStats",
+            f"status {sid} ov",
+            position="header",
+            style=ButtonStyle.PRIMARY,
+        )
+    if pages > 1:
+        buttons.data_button("◀️", f"status {sid} pre", position="header")
+        buttons.data_button("▶️", f"status {sid} nex", position="header")
+    buttons.data_button(
+        "🟢 Refresh",
+        f"status {sid} ref",
+        position="header",
+        style=ButtonStyle.SUCCESS,
+    )
+    if status != "All" or task_count > 20:
+        for label, value in STATUSES.items():
+            if value != status:
+                buttons.data_button(label, f"status {sid} st {value}")
+    return "\n\n".join(chunks + ["\n".join(footer)]), buttons.build_menu(8)

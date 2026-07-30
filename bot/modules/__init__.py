@@ -3,7 +3,7 @@ from .cancel_task import cancel, cancel_multi, cancel_all_buttons, cancel_all_up
 from .chat_permission import authorize, unauthorize, add_sudo, remove_sudo
 from .clone import clone_node
 from .clone_channel import clone_channel
-from .hstream_letter_leech import hstream_letter_leech
+from .hstream_letter_leech import hstream_letter_leech, hstream_pause, hstream_resume
 from .create_torrent import create_torrent
 from .exec import aioexecute, execute, clear
 from .file_selector import select, confirm_selection
@@ -38,6 +38,7 @@ from .imdb import imdb_search, imdb_callback
 from .poster_search import poster_search, poster_select
 from .sites import sites
 from .rss import get_rss_menu, rss_listener
+from .tamilmv import tamilmv
 from .search import torrent_search, torrent_search_update, initiate_search_tools
 from .nzb_search import hydra_search
 from .services import start, start_cb, login, ping, log, log_cb, sudo_only
@@ -49,7 +50,9 @@ from .ytdlp import ytdl, ytdl_leech
 from .video_tool_ui import video_tools_callback
 from ..helper.video_utils.video_tools import (
     active_merge_track_filter,
+    active_merge_text_filter,
     video_tools_media_collector,
+    video_tools_text_collector,
 )
 
 __all__ = [
@@ -66,6 +69,8 @@ __all__ = [
     "clone_node",
     "clone_channel",
     "hstream_letter_leech",
+    "hstream_pause",
+    "hstream_resume",
     "create_torrent",
     "aioexecute",
     "execute",
@@ -102,6 +107,7 @@ __all__ = [
     "sites",
     "get_rss_menu",
     "rss_listener",
+    "tamilmv",
     "torrent_search",
     "torrent_search_update",
     "initiate_search_tools",
@@ -128,5 +134,7 @@ __all__ = [
     "ytdl_leech",
     "video_tools_callback",
     "active_merge_track_filter",
+    "active_merge_text_filter",
     "video_tools_media_collector",
+    "video_tools_text_collector",
 ]

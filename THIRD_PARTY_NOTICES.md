@@ -8,3 +8,13 @@ The optional owner-only Hstream subtitle translation feature includes a converte
 - Source: https://huggingface.co/facebook/nllb-200-distilled-600M
 
 The model is intended only for the non-commercial deployment described by this project owner. CTranslate2 conversion and INT8 quantization do not change the model's license.
+
+## Adapted AGPL Components
+
+The responsive selector interaction patterns and TamilMV page-resolution approach
+include adapted ideas from these AGPL-3.0 projects. This repository remains under
+the terms stated in its license and preserves source attribution in the adapted
+modules.
+
+- irisXDR/NEO-WZML: https://github.com/irisXDR/NEO-WZML
+- SMDxTG/1TamilMV-Rss: https://github.com/SMDxTG/1TamilMV-Rss

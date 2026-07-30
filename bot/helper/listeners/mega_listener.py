@@ -839,6 +839,9 @@ class MegaAppListener(MegaListener):
                 LOGGER.error(f"Mega cancel-transfer failed: {e}")
         self._set_request_event()
         self._set_transfer_event()
+        cleanup = getattr(self, "_selection_cleanup", None)
+        if cleanup is not None:
+            await cleanup()
 
     def onUsersUpdate(self, api, users):
         pass
@@ -1197,6 +1200,9 @@ class MegaFolderListener(MegaListener):
                 LOGGER.error(f"MegaFolder cancel-transfer failed: {e}")
         self._set_request_event()
         self._set_transfer_event()
+        cleanup = getattr(self, "_selection_cleanup", None)
+        if cleanup is not None:
+            await cleanup()
 
     def onUsersUpdate(self, api, users):
         pass

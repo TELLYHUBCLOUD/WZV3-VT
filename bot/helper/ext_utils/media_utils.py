@@ -1442,6 +1442,7 @@ async def _enrich_template_metadata(metadata, filename, filepath=None, extra=Non
         "audio_codec", "audio_channels", "audio_bitrate", "hdr",
         "dynamic_range", "release_group", "group", "DS4K", "bit", "size",
         "date", "episode_name", "episodes", "genres", "rating", "plot", "synopsis",
+        "start", "end", "range", "range_tag", "filename", "upload_filename",
     ):
         metadata.setdefault(key, "")
     return metadata
@@ -1462,6 +1463,14 @@ def _clean_title_from_filename(filename):
     title = re.sub(r"[\[\](){}]", " ", stem)
     title = title.replace(".", " ").replace("_", " ").replace("-", " ")
     title = re.sub(r"\s+", " ", title).strip()
+
+    title = re.sub(
+        r"^(?:\s*S0*\d{1,2}\s*(?:-?\s*(?:E|EP)\s*\(?\s*0*\d{1,4}"
+        r"\s+(?:0*\d{1,4})\s*\)?)\s*)+",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    ).strip()
 
     merge_range = re.search(
         r"^\s*[Ss]0*\d{1,2}\s*EP\s*\d{1,4}\s+\d{1,4}\s+",
@@ -1595,9 +1604,18 @@ async def _extract_stream_rename_info(filepath):
 
 
 async def build_caption_metadata(filename, filepath=None, **extra):
-    merge_metadata = _extract_merge_range_metadata(filename)
-    metadata_seed = filename if merge_metadata else choose_media_title_seed(filename, **extra)
-    metadata = await extract_metadata_from_filename(metadata_seed, filepath)
+    supplied_metadata = extra.pop("template_metadata", None)
+    source_filename = str(extra.get("source_filename") or filename or "")
+    merge_metadata = (
+        _extract_merge_range_metadata(source_filename)
+        or _extract_merge_range_metadata(filename)
+    )
+    metadata_seed = choose_media_title_seed(filename, **extra)
+    metadata = (
+        dict(supplied_metadata)
+        if supplied_metadata
+        else await extract_metadata_from_filename(metadata_seed, filepath)
+    )
     if merge_metadata:
         metadata.update(merge_metadata)
     metadata = {key: str(value or "") for key, value in metadata.items()}
@@ -1648,7 +1666,7 @@ async def build_caption_metadata(filename, filepath=None, **extra):
 
 def _extract_merge_range_metadata(filename):
     merge_range = re.search(
-        r"\[S0*(\d{1,2})-EP\(\s*(\d{1,4})\s*-\s*(\d{1,4})\s*\)\]",
+        r"(?:\[S0*(\d{1,2})-)?EP\(\s*(\d{1,4})\s*-\s*(\d{1,4})\s*\)\]?",
         str(filename or ""),
         re.IGNORECASE,
     )
@@ -1657,15 +1675,33 @@ def _extract_merge_range_metadata(filename):
     start = merge_range.group(2).zfill(2)
     end = merge_range.group(3).zfill(2)
     episode = f"{start}-{end}"
+    season = (merge_range.group(1) or "1").lstrip("0") or "1"
     return {
-        "season": merge_range.group(1),
+        "season": season,
         "start": start,
         "end": end,
         "episode": episode,
         "episodes": episode,
         "range": f"EP({episode})",
-        "range_tag": f"[S{merge_range.group(1)}-EP({episode})]",
+        "range_tag": f"[S{season}-EP({episode})]",
     }
+
+
+def apply_caption_word_replace(text, rules):
+    """Apply sequential per-user caption replacement/removal rules."""
+    result = str(text or "")
+    if not rules:
+        return result
+    for rule in str(rules).split("|"):
+        rule = rule.strip()
+        if not rule:
+            continue
+        old, separator, replacement = rule.partition(":")
+        old = old.strip()
+        if not old:
+            continue
+        result = result.replace(old, replacement.strip() if separator else "")
+    return result
 
 
 async def _resolve_imdb_title(title, year=None):
@@ -1743,7 +1779,9 @@ def _looks_like_anime_name(filename, title):
         "wo",
     }
     episode_hint = re.search(
-        r"(?i)(?:\b(?:ep|episode|e)\s*0*\d{1,4}\b|\s-\s*0*\d{1,4}(?=[\s\._-]|$))",
+        r"(?i)(?:\b(?:ep|episode|e)\s*0*\d{1,4}\b|"
+        r"\s-\s*0*\d{1,4}(?=[\s\._-]|$)|"
+        r"[\s._-]0*\d{1,4}(?=[\s._-]+(?:2160p|1080p|720p|480p|4k)(?:\b|[._-])))",
         str(filename),
     )
     return bool(episode_hint and title_words & romanized_particles)
@@ -1783,7 +1821,22 @@ async def _resolve_tmdb_title(title, year=None):
         ]
         if not results:
             return ""
-        result = results[0]
+        if year:
+            wanted_year = str(year)
+            result = next(
+                (
+                    item
+                    for item in results
+                    if str(
+                        item.get("release_date")
+                        or item.get("first_air_date")
+                        or ""
+                    ).startswith(wanted_year)
+                ),
+                results[0],
+            )
+        else:
+            result = results[0]
         return result.get("title") or result.get("name") or ""
     except Exception as e:
         LOGGER.warning(f"TMDb title lookup failed for '{title}': {e}")
@@ -1873,7 +1926,9 @@ async def get_anilist_poster_link(title, as_doc=False):
     cover = media.get("coverImage") or {}
     if as_doc:
         return cover.get("extraLarge") or cover.get("large") or media.get("bannerImage")
-    return media.get("bannerImage") or cover.get("extraLarge") or cover.get("large")
+    # Video thumbnails must remain landscape. A portrait cover is useful for
+    # documents/posters, but Telegram crops it poorly as a video thumbnail.
+    return media.get("bannerImage")
 
 
 async def _fetch_mal_media(title):
@@ -2167,6 +2222,9 @@ async def extract_metadata_from_filename(filename, filepath=None):
                 " ",
                 title,
             ).strip()
+            clean_title = _clean_title_from_filename(title)
+            if clean_title:
+                title = clean_title
             metadata["title"] = title
             title_found = True
             break
@@ -2366,9 +2424,18 @@ async def apply_template_rename(filename, template, filepath=None, **extra):
     """
     if not template or "{" not in template:
         return filename
-    merge_metadata = _extract_merge_range_metadata(filename)
-    metadata_seed = filename if merge_metadata else choose_media_title_seed(filename, **extra)
-    metadata = await extract_metadata_from_filename(metadata_seed, filepath)
+    supplied_metadata = extra.pop("template_metadata", None)
+    source_filename = str(extra.get("source_filename") or filename or "")
+    merge_metadata = (
+        _extract_merge_range_metadata(source_filename)
+        or _extract_merge_range_metadata(filename)
+    )
+    metadata_seed = choose_media_title_seed(filename, **extra)
+    metadata = (
+        dict(supplied_metadata)
+        if supplied_metadata
+        else await extract_metadata_from_filename(metadata_seed, filepath)
+    )
     if merge_metadata:
         metadata.update(merge_metadata)
     metadata = await _enrich_template_metadata(metadata, filename, filepath, extra)
@@ -2453,6 +2520,26 @@ def _final_clean(title):
 
 def _strip_poster_search_prefix(title):
     title = str(title or "")
+    # Unbracketed channel handles sometimes use underscores as the only
+    # separator before a title. Stop at the first TitleCase word so the
+    # handle cannot consume the complete filename.
+    title = re.sub(
+        r"^\s*[-_. ]*@[A-Za-z0-9_]{3,64}?(?=_[A-Z][a-z])[-_. ]*",
+        "",
+        title,
+    )
+    title = re.sub(
+        r"^\s*[-_. ]*@[A-Za-z0-9_]{3,64}\s*(?:[-:|]+|[–—])\s*",
+        "",
+        title,
+    )
+    title = re.sub(
+        r"^\s*(?:\[\s*S0*\d{1,2}\s*(?:-?\s*(?:E|EP)\s*\(?\s*0*\d{1,4}"
+        r"\s*(?:-|\s)\s*0*\d{1,4}\s*\)?)\s*\]\s*)+",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
     uploader_pattern = "|".join(re.escape(tag) for tag in UPLOADER_TAGS)
     title = re.sub(
         rf"^\s*\[(?:{uploader_pattern})\]\s*[-_. ]*",
@@ -2476,7 +2563,8 @@ def _strip_poster_search_prefix(title):
 
 
 def is_hash_like_title(value):
-    text = re.sub(r"[^A-Za-z0-9]", "", str(value or ""))
+    value = re.sub(r"(?i)[._ -]*part\s*\d+$", "", str(value or "").strip())
+    text = re.sub(r"[^A-Za-z0-9]", "", value)
     if len(text) < 12:
         return False
     return bool(re.fullmatch(r"[a-fA-F0-9]{12,}", text))
@@ -2501,6 +2589,14 @@ def _usable_media_seed(value):
     title, _, _ = format_clean_poster_title(text)
     if not title or is_hash_like_title(title):
         return ""
+    meaningful = re.sub(TITLE_NOISE_PATTERN, " ", title, flags=re.IGNORECASE)
+    meaningful = re.sub(
+        r"(?i)\b(?:season|episode|ep|s\d+|e\d+)\b|\d+",
+        " ",
+        meaningful,
+    )
+    if len(re.sub(r"[^A-Za-z]", "", meaningful)) < 2:
+        return ""
     if len(re.findall(r"[A-Za-z0-9]", title)) < 2:
         return ""
     return text
@@ -2509,9 +2605,24 @@ def _usable_media_seed(value):
 def choose_media_title_seed(filename, **extra):
     caption = _first_caption_line(extra.get("file_caption") or extra.get("precaption"))
     extracted = extra.get("first_file") or extra.get("extracted_name")
-    if extra.get("prefer_filename"):
+    merge_source = extra.get("merge_source_name") or extra.get("container_name")
+    is_merged = bool(
+        _extract_merge_range_metadata(filename)
+        or _extract_merge_range_metadata(extra.get("source_filename"))
+    )
+    if is_merged:
+        candidates = [
+            merge_source,
+            caption,
+            extra.get("custom_name"),
+            extracted,
+            filename,
+            extra.get("link"),
+        ]
+    elif extra.get("prefer_filename"):
         candidates = [
             filename,
+            merge_source,
             extracted,
             caption,
             extra.get("custom_name"),
@@ -2519,6 +2630,7 @@ def choose_media_title_seed(filename, **extra):
         ]
     else:
         candidates = [
+            merge_source,
             extracted,
             caption,
             extra.get("custom_name"),
@@ -2580,6 +2692,13 @@ def format_clean_poster_title(raw_title, rename_regex=None):
         if year:
             title = re.sub(rf"\b{re.escape(year)}\b", " ", title)
         title = re.sub(TITLE_NOISE_PATTERN, " ", title, flags=re.IGNORECASE)
+        title = re.sub(
+            r"(?i)(?<![A-Za-z0-9])(?:season\s*|s)0*\d{1,2}(?![A-Za-z0-9])",
+            " ",
+            title,
+        )
+        if _looks_like_anime_name(raw_title, title):
+            title = re.sub(r"\s+\d{1,4}$", "", title).strip()
         title = _final_clean(re.sub(r"\s+", " ", title).strip(" -._"))
         if title:
             return title, season, year
@@ -2702,7 +2821,22 @@ async def get_tmdb_poster_link(title, year=None, as_doc=False):
                                 LOGGER.info(f"No TMDb results for '{title}'")
                                 break
 
-                            first_result = results[0]
+                            if year:
+                                wanted_year = str(year)
+                                first_result = next(
+                                    (
+                                        item
+                                        for item in results
+                                        if str(
+                                            item.get("release_date")
+                                            or item.get("first_air_date")
+                                            or ""
+                                        ).startswith(wanted_year)
+                                    ),
+                                    results[0],
+                                )
+                            else:
+                                first_result = results[0]
                             tmdb_id = first_result.get("id")
                             media_type = first_result.get("media_type", "movie")
                             result_name = (
@@ -2763,9 +2897,6 @@ async def get_tmdb_poster_link(title, year=None, as_doc=False):
                                         (en_backdrops, "landscape (en)"),
                                         (clean_backdrops, "landscape (clean)"),
                                         (backdrops, "landscape (other)"),
-                                        (en_posters, "poster (en)"),
-                                        (clean_posters, "poster (clean)"),
-                                        (posters, "poster (fallback)"),
                                     )
                                 for images, img_type in choices:
                                     if images:
@@ -2789,7 +2920,7 @@ async def get_tmdb_poster_link(title, year=None, as_doc=False):
                             poster_path = first_result.get("poster_path")
                             fallback = (
                                 (poster_path or backdrop_path) if as_doc
-                                else (backdrop_path or poster_path)
+                                else backdrop_path
                             )
                             if fallback:
                                 LOGGER.info(
@@ -2854,7 +2985,10 @@ async def get_final_poster_url(raw_filename, as_doc=False, rename_regex=None):
     if year:
         LOGGER.info(f"Year extracted: {year}")
 
-    cache_key = f"poster:{title.lower()}:{'doc' if as_doc else 'media'}"
+    cache_key = (
+        f"poster:{title.lower()}:{str(year or '')}:"
+        f"{'doc' if as_doc else 'media'}"
+    )
     if cache_key in _metadata_cache:
         cached_url, provider = _metadata_cache[cache_key]
         LOGGER.info(f"Poster found via cached {provider}")

@@ -221,12 +221,31 @@ class StarFallXUploadManager:
         self._main_active = 0
         self._pin_unlocked = {}
         self._last_queue_reason = ""
+        self._destination_cache = {}
 
     def enabled(self):
         return str(Config.UPLOAD_ENGINE or "").lower() == "starfallx"
 
     def _cooling(self, key):
         return self._cooldown.get(key, 0) > time()
+
+    async def _destination_accessible(self, client, chat_id, label):
+        if chat_id is None:
+            return False
+        cache_key = (id(client), str(chat_id))
+        cached = self._destination_cache.get(cache_key)
+        if cached and cached[1] > time():
+            return cached[0]
+        try:
+            await client.get_chat(chat_id)
+            self._destination_cache[cache_key] = (True, time() + 300)
+            return True
+        except Exception as error:
+            self._destination_cache[cache_key] = (False, time() + 30)
+            LOGGER.warning(
+                f"Skipping {label}: upload destination {chat_id} is inaccessible: {error}"
+            )
+            return False
 
     def _token_key(self, scope, owner, token):
         return f"{scope}:{owner}:{token_hash(token)[:16]}"
@@ -746,6 +765,12 @@ class StarFallXUploadManager:
                 "will go directly to the final destination. Add the helper bot to "
                 "the main dump to enable sequential dump/copy support."
             )
+        if not await self._destination_accessible(
+            client, route_chat_id, f"StarFallX helper @{username}"
+        ):
+            record["status"] = "Destination unavailable"
+            record["last_error"] = f"Cannot access {route_chat_id}"
+            return None
         record.update(
             {
                 "bot_id": meta.get("bot_id") or record.get("bot_id"),
@@ -790,18 +815,23 @@ class StarFallXUploadManager:
                 candidates.append((active, key, client))
         if not candidates:
             return None
-        _, key, client = sorted(candidates, key=lambda item: item[0])[0]
-        self._active[key] = self._active.get(key, 0) + 1
-        username = self._meta.get(key, {}).get("username", "GlobalBot")
-        return UploadRoute(
-            "global_bot",
-            f"Global Bot @{username}",
-            client,
-            chat_id,
-            thread_id,
-            key,
-            True,
-        )
+        for _, key, client in sorted(candidates, key=lambda item: item[0]):
+            username = self._meta.get(key, {}).get("username", "GlobalBot")
+            if not await self._destination_accessible(
+                client, chat_id, f"global bot @{username}"
+            ):
+                continue
+            self._active[key] = self._active.get(key, 0) + 1
+            return UploadRoute(
+                "global_bot",
+                f"Global Bot @{username}",
+                client,
+                chat_id,
+                thread_id,
+                key,
+                True,
+            )
+        return None
 
     async def _try_acquire_locked(self, listener):
         chat_id, thread_id = parse_dump_chat(
@@ -894,6 +924,7 @@ class StarFallXUploadManager:
         self._active.clear()
         self._cooldown.clear()
         self._meta.clear()
+        self._destination_cache.clear()
         self._main_active = 0
         for client in clients:
             with contextlib.suppress(Exception):

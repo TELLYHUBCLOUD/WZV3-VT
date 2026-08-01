@@ -54,7 +54,7 @@ def add_handlers():
         MessageHandler(
             broadcast,
             filters=command(BotCommands.BroadcastCommand, case_sensitive=True)
-            & CustomFilters.sudo,
+            & CustomFilters.owner,
         )
     )
     TgClient.bot.add_handler(

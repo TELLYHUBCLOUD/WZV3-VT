@@ -15,6 +15,7 @@ from ..ext_utils.bot_utils import sync_to_async
 from ..ext_utils.media_utils import (
     _clean_title_from_filename,
     _looks_like_anime_name,
+    apply_caption_word_replace,
     build_caption_metadata,
     choose_media_title_seed,
     extract_metadata_from_filename,
@@ -283,7 +284,22 @@ async def _tmdb_search(title, year=None):
         ]
         if not results:
             return {}
-        item = results[0]
+        if year:
+            wanted_year = str(year)
+            item = next(
+                (
+                    result
+                    for result in results
+                    if str(
+                        result.get("release_date")
+                        or result.get("first_air_date")
+                        or ""
+                    ).startswith(wanted_year)
+                ),
+                results[0],
+            )
+        else:
+            item = results[0]
         media_type = item.get("media_type") or "movie"
         details = {}
         try:
@@ -432,12 +448,36 @@ async def _imdb_search(title, year=None):
         return {}
 
 
-async def _metadata(filename, filepath=None, user_dict=None, file_caption="", link=""):
-    if search(r"\[S0*\d{1,2}-EP\(\s*\d{1,4}\s*-\s*\d{1,4}\s*\)\]", str(filename or ""), IGNORECASE):
-        seed = filename
-    else:
-        seed = choose_media_title_seed(filename, file_caption=file_caption, link=link)
-    base = await extract_metadata_from_filename(seed, filepath)
+async def _metadata(
+    filename,
+    filepath=None,
+    user_dict=None,
+    file_caption="",
+    link="",
+    first_file="",
+    custom_name="",
+    merge_source_name="",
+):
+    seed = choose_media_title_seed(
+        filename,
+        first_file=first_file,
+        file_caption=file_caption,
+        custom_name=custom_name,
+        link=link,
+        merge_source_name=merge_source_name,
+        source_filename=filename,
+    )
+    caption_data = await build_caption_metadata(
+        filename,
+        filepath,
+        source_filename=filename,
+        first_file=first_file,
+        file_caption=file_caption,
+        custom_name=custom_name,
+        link=link,
+        merge_source_name=merge_source_name,
+    )
+    base = dict(caption_data)
     title = _clean_search_title(seed, base.get("title") or "")
     if not title or title.lower() == "unknown":
         title = _clean_search_title(seed)
@@ -496,12 +536,6 @@ async def _metadata(filename, filepath=None, user_dict=None, file_caption="", li
         "link": link,
     }
     data.update({k: v for k, v in provider.items() if v not in (None, "")})
-    caption_data = await build_caption_metadata(
-        seed,
-        filepath,
-        file_caption=file_caption,
-        link=link,
-    )
     for key, value in caption_data.items():
         if not data.get(key):
             data[key] = value
@@ -813,7 +847,10 @@ def build_post_caption(user_dict, metadata):
     )
     values.setdefault("name", values.get("title", ""))
     try:
-        return template.format_map(values)
+        caption = template.format_map(values)
+        return apply_caption_word_replace(
+            caption, (user_dict or {}).get("CAPTION_WORD_REPLACE", "")
+        )
     except Exception as err:
         LOGGER.warning(f"Poster caption format failed: {err}")
         return f"<b>{values.get('title') or values.get('name') or 'Poster'}</b>"
@@ -828,19 +865,22 @@ async def generate_task_poster(
     first_file="",
     custom_name="",
     link="",
+    merge_source_name="",
     as_doc=False,
 ):
     user_dict = user_dict or {}
     if not is_auto_poster_enabled(user_dict):
         return None
-    poster_seed = choose_media_title_seed(
+    metadata = await _metadata(
         filename,
-        first_file=first_file,
-        file_caption=file_caption,
-        custom_name=custom_name,
-        link=link,
+        filepath,
+        user_dict,
+        file_caption,
+        link,
+        first_file,
+        custom_name,
+        merge_source_name,
     )
-    metadata = await _metadata(poster_seed, filepath, user_dict, file_caption, link)
     template = str(_cfg(user_dict, "POST_TEMPLATE_ID", 1) or 1)
     if template not in {str(i) for i in range(1, POSTER_TEMPLATE_COUNT + 1)}:
         template = "1"

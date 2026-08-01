@@ -10,6 +10,9 @@ from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.gofile_uploade
 from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.pixeldrain_uploader import (
     PixelDrainUpload,
 )
+from bot.helper.mirror_leech_utils.uphoster_utils.uploaders_utils.vikingfile_uploader import (
+    VikingFileUpload,
+)
 
 LOGGER = getLogger(__name__)
 
@@ -17,6 +20,7 @@ SERVICE_MAP = {
     "gofile": GoFileUpload,
     "buzzheavier": BuzzHeavierUpload,
     "pixeldrain": PixelDrainUpload,
+    "vikingfile": VikingFileUpload,
 }
 
 

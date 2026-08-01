@@ -513,6 +513,7 @@ class TaskListener(TaskConfig):
                     first_file=getattr(self, "file_details", {}).get("first_file", ""),
                     custom_name=getattr(self, "custom_name", ""),
                     link=getattr(self, "source_url", ""),
+                    merge_source_name=getattr(self, "merge_source_name", ""),
                     as_doc=self.as_doc,
                 )
                 if poster_payload:

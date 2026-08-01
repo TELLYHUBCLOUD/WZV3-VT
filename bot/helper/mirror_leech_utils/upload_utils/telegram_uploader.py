@@ -1,4 +1,5 @@
 from asyncio import create_task, sleep
+from html import escape, unescape
 from logging import getLogger
 from os import path as ospath, walk
 from re import IGNORECASE, match as re_match, sub as re_sub
@@ -26,7 +27,7 @@ from pyrogram.types import (
 from tenacity import (
     RetryError,
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -47,6 +48,7 @@ from ...ext_utils.starfallx_upload import (
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 from ...telegram_helper.message_utils import send_message
 from ...ext_utils.media_utils import (
+    apply_caption_word_replace,
     apply_regex_rename,
     apply_template_rename,
     build_caption_metadata,
@@ -66,6 +68,18 @@ from ...ext_utils.media_utils import (
 from ...telegram_helper.message_utils import delete_message
 
 LOGGER = getLogger(__name__)
+
+PERMANENT_DESTINATION_ERRORS = {
+    "CHANNEL_INVALID",
+    "CHAT_ADMIN_REQUIRED",
+    "PEER_ID_INVALID",
+    "USER_NOT_PARTICIPANT",
+}
+
+
+def _retry_direct_upload(error):
+    error_text = f"{type(error).__name__}: {error}".upper()
+    return not any(code in error_text for code in PERMANENT_DESTINATION_ERRORS)
 
 
 class TelegramUploader:
@@ -87,6 +101,7 @@ class TelegramUploader:
         self._lprefix = ""
         self._lsuffix = ""
         self._lcaption = ""
+        self._caption_word_replace = ""
         self._lfont = ""
         self._complete_msg = True
         self._sequential_leech = True
@@ -124,6 +139,7 @@ class TelegramUploader:
             "LEECH_PREFIX": ("_lprefix", ""),
             "LEECH_SUFFIX": ("_lsuffix", ""),
             "LEECH_CAPTION": ("_lcaption", ""),
+            "CAPTION_WORD_REPLACE": ("_caption_word_replace", ""),
             "LEECH_FONT": ("_lfont", ""),
             "LEECH_COMPLETE_MSG": ("_complete_msg", True),
             "SEQUENTIAL_LEECH": ("_sequential_leech", True),
@@ -187,7 +203,21 @@ class TelegramUploader:
                                 f"Failed to send 'Leech Started' message to {self._listener.leech_dest}\n{e}",
                             )
             except Exception as e:
-                await self._listener.on_upload_error(str(e))
+                error_name = type(e).__name__
+                if error_name in {
+                    "ChannelInvalid",
+                    "ChatAdminRequired",
+                    "PeerIdInvalid",
+                    "UserNotParticipant",
+                }:
+                    error = (
+                        "Upload destination is inaccessible. Add the upload bot "
+                        "to the destination, grant permission to post, and verify "
+                        "the chat/topic ID."
+                    )
+                else:
+                    error = f"Unable to use upload destination: {e}"
+                await self._listener.on_upload_error(error)
                 return False
 
         elif self._user_session:
@@ -207,6 +237,18 @@ class TelegramUploader:
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
+        source_path = self._up_path or ospath.join(dirpath, pre_file_)
+        template_data = await build_caption_metadata(
+            pre_file_,
+            source_path,
+            source_filename=pre_file_,
+            file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
+            first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
+            custom_name=getattr(self._listener, "custom_name", ""),
+            link=getattr(self._listener, "source_url", ""),
+            merge_source_name=getattr(self._listener, "merge_source_name", ""),
+            prefer_filename=True,
+        )
         rss_rename_mode = getattr(self._listener, "rss_rename_mode", "")
         if getattr(self._listener, "rss_auto_leech", False) and rss_rename_mode in (
             "title",
@@ -263,7 +305,10 @@ class TelegramUploader:
                             first_file=getattr(self._listener, "file_details", {}).get("first_file", ""),
                             custom_name=getattr(self._listener, "custom_name", ""),
                             link=getattr(self._listener, "source_url", ""),
+                            merge_source_name=getattr(self._listener, "merge_source_name", ""),
                             prefer_filename=True,
+                            source_filename=pre_file_,
+                            template_metadata=template_data,
                         )
                         cap_file_ = file_
                 elif rename_method == "regex":
@@ -314,7 +359,7 @@ class TelegramUploader:
             parts[0] = re_sub(
                 r"\{([^}]+)\}", lambda m: f"{{{m.group(1).lower()}}}", parts[0]
             )
-            up_path = self._up_path or ospath.join(dirpath, pre_file_)
+            up_path = source_path
             caption_data = await build_caption_metadata(
                 cap_file_,
                 up_path,
@@ -326,6 +371,8 @@ class TelegramUploader:
                 first_file=self._listener.file_details.get("first_file", ""),
                 custom_name=getattr(self._listener, "custom_name", ""),
                 link=getattr(self._listener, "source_url", ""),
+                source_filename=pre_file_,
+                template_metadata=template_data,
             )
             try:
                 cap_mono = parts[0].format_map(caption_data)
@@ -345,6 +392,9 @@ class TelegramUploader:
                 lambda m: {"%%": "|", "&%&": "{", "$%$": "}"}[m.group()],
                 cap_mono,
             )
+        cap_mono = apply_caption_word_replace(
+            cap_mono, self._caption_word_replace
+        )
 
         if len(file_) > 255:
             if is_archive(file_):
@@ -419,9 +469,17 @@ class TelegramUploader:
         try:
             caption = post.get("caption") or "<b>Poster</b>"
             target = self._sent_msg or self._listener.message
-            sent = await send_message(target, caption, photo=path)
+            poster_followup = caption if len(str(caption)) > 1000 else ""
+            media_caption = (
+                f"<b>{escape(str(post.get('title') or self._listener.name)[:900])}</b>"
+                if poster_followup
+                else caption
+            )
+            sent = await send_message(target, media_caption, photo=path)
             if sent:
                 self._sent_msg = sent
+                if poster_followup:
+                    await self._send_caption_followup(sent, poster_followup)
                 if (
                     (self._listener.is_super_chat or self._listener.up_dest)
                     and not self._is_private
@@ -497,6 +555,20 @@ class TelegramUploader:
             LOGGER.warning(f"Copy flood wait: sleeping {wait_time:.1f}s")
             await sleep(wait_time)
             return await TgClient.bot.copy_message(**kwargs)
+        except BadRequest as error:
+            if "MEDIA_CAPTION_TOO_LONG" not in str(error).upper():
+                raise
+            source = await TgClient.bot.get_messages(
+                chat_id=kwargs["from_chat_id"],
+                message_ids=kwargs["message_id"],
+            )
+            original_caption = getattr(source, "caption", None)
+            clean_kwargs = dict(kwargs)
+            clean_kwargs["caption"] = "<code>Uploaded file</code>"
+            copied = await TgClient.bot.copy_message(**clean_kwargs)
+            if original_caption:
+                await self._send_caption_followup(copied, original_caption)
+            return copied
 
     async def _flush_deferred_copies(self):
         if not self._deferred_copies:
@@ -657,7 +729,7 @@ class TelegramUploader:
     @retry(
         wait=wait_exponential(multiplier=2, min=4, max=8),
         stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception(_retry_direct_upload),
     )
     async def _send_direct_file(
         self,
@@ -710,7 +782,31 @@ class TelegramUploader:
             **common,
         )
 
-    async def _upload_file(self, cap_mono, file, o_path, force_document=False):
+    async def _send_caption_followup(self, message, caption):
+        plain = unescape(re_sub(r"<[^>]+>", "", str(caption or ""))).strip()
+        while plain and not self._listener.is_cancelled:
+            if len(plain) <= 4000:
+                chunk, plain = plain, ""
+            else:
+                split_at = plain.rfind("\n", 0, 4000)
+                if split_at < 1000:
+                    split_at = 4000
+                chunk, plain = plain[:split_at], plain[split_at:].lstrip()
+            await message.reply_text(
+                escape(chunk),
+                quote=True,
+                disable_web_page_preview=True,
+                disable_notification=True,
+            )
+
+    async def _upload_file(
+        self,
+        cap_mono,
+        file,
+        o_path,
+        force_document=False,
+        caption_followup=None,
+    ):
         if not await aiopath.exists(o_path):
             LOGGER.warning(f"{o_path} disappeared before upload; skipping.")
             self._is_corrupted = True
@@ -741,6 +837,9 @@ class TelegramUploader:
         self._is_corrupted = False
         route = None
         key = ""
+        if caption_followup is None and len(str(cap_mono or "")) > 1000:
+            caption_followup = cap_mono
+            cap_mono = f"<code>{escape(file[:900])}</code>"
         try:
             is_video, is_audio, is_image = await get_document_type(self._up_path)
             queued_for_media_group = False
@@ -767,6 +866,7 @@ class TelegramUploader:
                             file_caption=getattr(self._listener, "file_details", {}).get("caption", ""),
                             custom_name=custom_name,
                             link=getattr(self._listener, "source_url", ""),
+                            merge_source_name=getattr(self._listener, "merge_source_name", ""),
                             prefer_filename=True,
                         )
                         force_anime_thumb = getattr(self._listener, "force_anime_thumbnail", False)
@@ -977,6 +1077,10 @@ class TelegramUploader:
                         progress=self._upload_progress,
                     )
 
+            if caption_followup and self._sent_msg:
+                await self._send_caption_followup(self._sent_msg, caption_followup)
+                caption_followup = ""
+
             if (
                 not self._listener.is_cancelled
                 and self._media_group
@@ -1036,7 +1140,13 @@ class TelegramUploader:
                 and await aiopath.exists(doc_thumb)
             ):
                 await remove(doc_thumb)
-            return await self._upload_file(cap_mono, file, o_path)
+            return await self._upload_file(
+                cap_mono,
+                file,
+                o_path,
+                force_document,
+                caption_followup,
+            )
         except Exception as err:
             await starfallx_upload.release_route(route, failed=bool(route and route.direct))
             self._active_route = None
@@ -1054,9 +1164,22 @@ class TelegramUploader:
                 await remove(doc_thumb)
             err_type = "RPCError: " if isinstance(err, RPCError) else ""
             LOGGER.error(f"{err_type}{err}. Path: {self._up_path}", exc_info=True)
-            if isinstance(err, BadRequest) and key != "documents":
+            if (
+                isinstance(err, BadRequest)
+                and key != "documents"
+                and not any(
+                    code in str(err).upper()
+                    for code in PERMANENT_DESTINATION_ERRORS
+                )
+            ):
                 LOGGER.error(f"Retrying As Document. Path: {self._up_path}")
-                return await self._upload_file(cap_mono, file, o_path, True)
+                return await self._upload_file(
+                    cap_mono,
+                    file,
+                    o_path,
+                    True,
+                    caption_followup,
+                )
             raise err
 
     @property

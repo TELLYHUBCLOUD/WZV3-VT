@@ -99,7 +99,7 @@ async def render_merge_intake(vt_msg, state):
         )
     rows.extend(
         [
-            [InlineKeyboardButton("Preview 60s", callback_data=f"vt_preview_{task_id}")],
+            [InlineKeyboardButton("Preview 120s", callback_data=f"vt_preview_{task_id}")],
             [
                 InlineKeyboardButton("🟢 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
                 InlineKeyboardButton("Back", callback_data=f"vt_main_{task_id}"),
@@ -110,12 +110,20 @@ async def render_merge_intake(vt_msg, state):
 
 
 async def render_merge_audio_config(query, state, index):
+    if not any(
+        entry["index"] == index for entry in state.get("external_audio", [])
+    ):
+        await query.answer("Audio track no longer exists.", show_alert=True)
+        return
+    await render_merge_audio_config_message(query.message, state, index)
+
+
+async def render_merge_audio_config_message(message, state, index):
     item = next(
         (entry for entry in state.get("external_audio", []) if entry["index"] == index),
         None,
     )
     if not item:
-        await query.answer("Audio track no longer exists.", show_alert=True)
         return
     task_id = state["task_id"]
     selected = index in state.get("merge_audio", [])
@@ -142,7 +150,7 @@ async def render_merge_audio_config(query, state, index):
         ],
         [InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}")],
     ]
-    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows))
+    await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def render_video_tools_main(vt_msg, state):
@@ -349,6 +357,15 @@ async def video_tools_callback(_, query):
 
         if action == "done":
             if state.get("merge_intake"):
+                if state.get("preview_stale") and state.get("merge_audio"):
+                    await query.message.edit_text(
+                        "<b>Preview required.</b> Generate the 120-second preview "
+                        "after your latest audio settings, then press Done.",
+                        reply_markup=InlineKeyboardMarkup(
+                            [[InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}")]]
+                        ),
+                    )
+                    return
                 try:
                     finish_merge_track_intake(state, event)
                 except ValueError as error:
@@ -357,7 +374,11 @@ async def video_tools_callback(_, query):
             else:
                 state["completed"] = True
                 event.set()
-            await query.message.edit_text("<b>Video Tools configuration saved.</b> Processing...")
+            try:
+                await query.message.edit_text("<b>Video Tools configuration saved.</b> Processing...")
+            except Exception as error:
+                if "MESSAGE_ID_INVALID" not in str(error).upper():
+                    raise
             return
 
         if action == "removego":
@@ -438,7 +459,7 @@ async def video_tools_callback(_, query):
             return
 
         if action == "preview":
-            await query.message.edit_text("<b>Generating the 60-second middle preview...</b>")
+            await query.message.edit_text("<b>Generating the 120-second middle preview...</b>")
             try:
                 await generate_merge_preview(state)
                 await render_merge_intake(query.message, state)
@@ -594,6 +615,8 @@ async def video_tools_callback(_, query):
             }
             await render_stream_list(query, state, action_key, title_map.get(action_key, "Remove Stream"))
     except Exception as e:
+        if state.get("completed") and "MESSAGE_ID_INVALID" in str(e).upper():
+            return
         err_msg = f"{type(e).__name__}: {e}"
         LOGGER.error(f"VT callback error: action={action} data={data} - {e}")
         try:

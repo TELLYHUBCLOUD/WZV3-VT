@@ -18,7 +18,10 @@ from ..ext_utils.files_utils import (
     is_archive,
     is_supported_archive,
 )
-from ..ext_utils.media_utils import extract_metadata_from_filename
+from ..ext_utils.media_utils import (
+    extract_metadata_from_filename,
+    format_clean_poster_title,
+)
 from ..telegram_helper.message_utils import edit_message, send_file, send_message
 from .video_tools import (
     VIDEO_EXTENSIONS,
@@ -61,7 +64,7 @@ def _lang_set(value):
     }
 
 
-def _lang_matches(track_lang, keep):
+def _lang_matches(track_lang, keep, track_title=""):
     if not keep:
         return False
     lang = str(track_lang or "").strip().lower()
@@ -75,6 +78,12 @@ def _lang_matches(track_lang, keep):
         "hi": {"hi", "hin", "hindi"},
         "hin": {"hi", "hin", "hindi"},
         "hindi": {"hi", "hin", "hindi"},
+        "te": {"te", "tel", "telugu"},
+        "tel": {"te", "tel", "telugu"},
+        "telugu": {"te", "tel", "telugu"},
+        "ja": {"ja", "jpn", "japanese"},
+        "jpn": {"ja", "jpn", "japanese"},
+        "japanese": {"ja", "jpn", "japanese"},
         "zh": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
         "zho": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
         "chi": {"chi", "zho", "zh", "chs", "cht", "cn", "chinese", "mandarin", "cantonese"},
@@ -93,7 +102,10 @@ def _lang_matches(track_lang, keep):
     for item in keep:
         expanded_keep |= aliases.get(item, {item})
         expanded_keep.add(item)
-    return bool((aliases.get(lang, {lang}) | {lang}) & expanded_keep)
+    track_values = aliases.get(lang, {lang}) | {lang}
+    for token in re.findall(r"[a-z]{2,}|[\u3040-\u30ff\u4e00-\u9fff]+", str(track_title or "").lower()):
+        track_values |= aliases.get(token, {token})
+    return bool(track_values & expanded_keep)
 
 
 async def _set_process_message(listener, text):
@@ -256,7 +268,9 @@ async def _auto_keep_streams(listener, up_path):
         state = _base_state(str(listener.mid), ospath.basename(video), audio_tracks, sub_tracks)
         if keep_audio:
             audio_keep = [
-                t["index"] for t in audio_tracks if _lang_matches(t["lang"], keep_audio)
+                t["index"]
+                for t in audio_tracks
+                if _lang_matches(t["lang"], keep_audio, t.get("title", ""))
             ]
             if audio_tracks and not audio_keep:
                 await send_message(
@@ -267,7 +281,9 @@ async def _auto_keep_streams(listener, up_path):
             state["keep_audio"] = audio_keep
         if keep_sub:
             sub_keep = [
-                t["index"] for t in sub_tracks if _lang_matches(t["lang"], keep_sub)
+                t["index"]
+                for t in sub_tracks
+                if _lang_matches(t["lang"], keep_sub, t.get("title", ""))
             ]
             if sub_tracks and not sub_keep:
                 await send_message(
@@ -328,7 +344,9 @@ async def _auto_remove_streams(listener, up_path):
         state["sub_order_value"] = sub_order or ""
         if keep_audio:
             audio_keep = [
-                t["index"] for t in audio_tracks if _lang_matches(t["lang"], keep_audio)
+                t["index"]
+                for t in audio_tracks
+                if _lang_matches(t["lang"], keep_audio, t.get("title", ""))
             ]
             if audio_tracks and not audio_keep:
                 await send_message(
@@ -341,7 +359,9 @@ async def _auto_remove_streams(listener, up_path):
             ]
         if keep_sub:
             sub_keep = [
-                t["index"] for t in sub_tracks if _lang_matches(t["lang"], keep_sub)
+                t["index"]
+                for t in sub_tracks
+                if _lang_matches(t["lang"], keep_sub, t.get("title", ""))
             ]
             if sub_tracks and not sub_keep:
                 await send_message(
@@ -532,8 +552,10 @@ def _batch_name(listener, batch):
         getattr(listener, "merge_source_name", "")
     )
     if source_name:
-        meta["title"] = source_name
-        meta["name"] = source_name
+        source_title, _, _ = format_clean_poster_title(source_name)
+        clean_source = source_title or source_name
+        meta["title"] = clean_source
+        meta["name"] = clean_source
     try:
         base = template.format_map({k: str(v or "") for k, v in meta.items()})
     except Exception:

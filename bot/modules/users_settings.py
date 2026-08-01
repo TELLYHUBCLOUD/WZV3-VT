@@ -77,13 +77,14 @@ def config_bool(value, default=False):
 
 
 TEMPLATE_VARIABLES_TEXT = (
-    "{filename} {upload_filename} {file_name} {file_size} {file_caption} "
-    "{languages} {subtitles} {duration} {ott} {resolution} {name} {title} "
-    "{year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} "
-    "{shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} "
-    "{acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} "
-    "{dynamic_range} {release_group} {group} {start} {end} {range} "
-    "{date} {episode_name}"
+    "{filename} {upload_filename} {file_name} {file_size} {size} {file_caption} "
+    "{languages} {language} {subtitles} {duration} {ott} {source} {resolution} "
+    "{name} {title} {year} {quality} {DS4K} {season} {episode} {episodes} "
+    "{start} {end} {range} {range_tag} {audio} {lib} {extension} {shortsub} "
+    "{shortlang} {part} {raw_name} {link} {vcodec} {codec} {bit} {acodec} "
+    "{audio_codec} {audio_channels} {audio_bitrate} {hdr} {dynamic_range} "
+    "{release_group} {group} {date} {episode_name} {genres} {rating} "
+    "{plot} {synopsis}"
 )
 
 leech_options = [
@@ -93,6 +94,7 @@ leech_options = [
     "LEECH_PREFIX",
     "LEECH_SUFFIX",
     "LEECH_CAPTION",
+    "CAPTION_WORD_REPLACE",
     "LEECH_FONT",
     "THUMBNAIL_LAYOUT",
     "lremname_auto",
@@ -120,6 +122,8 @@ uphoster_options = [
     "BUZZHEAVIER_TOKEN",
     "BUZZHEAVIER_FOLDER_ID",
     "PIXELDRAIN_KEY",
+    "VIKINGFILE_HASH",
+    "VIKINGFILE_FOLDER",
 ]
 rclone_options = ["RCLONE_CONFIG", "RCLONE_PATH", "RCLONE_FLAGS"]
 gdrive_options = ["TOKEN_PICKLE", "GDRIVE_ID", "INDEX_URL"]
@@ -397,10 +401,24 @@ Here I will explain how to use mltb.* which is reference to files you want to wo
         "PixelDrain API Key",
         "<i>Send your PixelDrain API Key.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
     ),
+    "VIKINGFILE_HASH": (
+        "String",
+        "VikingFile User Hash",
+        "<i>Send your VikingFile user hash, or leave it empty for anonymous uploads.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
+    "VIKINGFILE_FOLDER": (
+        "String",
+        "VikingFile Folder Path",
+        "<i>Send an optional VikingFile folder path.</i> \n┖ <b>Time Left :</b> <code>60 sec</code>",
+    ),
     "lremname_auto": (
         "AutoRename Template",
         "AutoRename Template uses filename, caption, media metadata, TMDb, and AniList lookup.",
-        "Send AutoRename Template.\n<b>Variables:</b> <code>{file_name} {file_size} {file_caption} {languages} {subtitles} {duration} {ott} {resolution} {name} {title} {year} {quality} {DS4K} {season} {episode} {audio} {lib} {extension} {shortsub} {shortlang} {part} {raw_name} {link} {vcodec} {codec} {acodec} {audio_codec} {audio_channels} {audio_bitrate} {hdr} {dynamic_range} {release_group} {group}</code>\n<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {bit} {DS4K} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n<b>Timeout:</b> 60 sec",
+        "Send AutoRename Template.\n"
+        f"<b>Variables:</b> <code>{TEMPLATE_VARIABLES_TEXT}</code>\n"
+        "<b>Offsets:</b> <code>{episode:+12}</code> or <code>{season:-1}</code>\n"
+        "<b>Example:</b> <code>[S{season}E{episode}] {name} {resolution} {bit} {DS4K} {quality} {codec} {audio_codec} {audio_channels} {hdr}</code>\n"
+        "<b>Timeout:</b> 60 sec",
     ),
     "lremname_regex": (
         "Regex Remname",
@@ -415,6 +433,13 @@ user_settings_text["LEECH_CAPTION"] = (
     "Send Leech Caption. You can add HTML tags and placeholders: "
     f"<code>{TEMPLATE_VARIABLES_TEXT}</code>.\n"
     "<b>Time Left:</b> <code>60 sec</code>",
+)
+user_settings_text["CAPTION_WORD_REPLACE"] = (
+    "Replacement Rules",
+    "Sequential word replacement/removal for leech and poster captions only.",
+    "Send rules separated by <code>|</code>. Use "
+    "<code>word1:replacement1 | word2:replacement2</code>; a word without "
+    "<code>:</code> is removed.\n<b>Time Left:</b> <code>60 sec</code>",
 )
 user_settings_text["lremname_auto"] = (
     "AutoRename Template",
@@ -434,9 +459,8 @@ for _post_key, _post_title in {
         "Telegram HTML",
         f"{_post_title} supports Telegram HTML and poster placeholders.",
         "Send caption template.\n"
-        "<b>Variables:</b> <code>{name} {title} {year} {season} {episode} {episodes} "
-        "{genres} {rating} {status} {plot} {synopsis} {quality} {resolution} "
-        "{bit} {codec} {audio} {subtitles} {shortlang} {shortsub}</code>\n"
+        f"<b>Variables:</b> <code>{TEMPLATE_VARIABLES_TEXT} "
+        "{genres} {rating} {status} {plot} {synopsis} {studio} {first_aired}</code>\n"
         "<b>Timeout:</b> 60 sec",
     )
 user_settings_text["POST_BRAND_NAME"] = (
@@ -650,6 +674,9 @@ Unlock to view, add, test, remove, or export helper token data."""
             or (Config.LEECH_CAPTION if "LEECH_CAPTION" not in user_dict else "")
             or "Not Exists"
         )
+        caption_word_replace = (
+            user_dict.get("CAPTION_WORD_REPLACE") or "Not Set"
+        )
         thumb_layout = (
             user_dict.get("THUMBNAIL_LAYOUT")
             or (Config.THUMBNAIL_LAYOUT if "THUMBNAIL_LAYOUT" not in user_dict else "")
@@ -692,6 +719,7 @@ Unlock to view, add, test, remove, or export helper token data."""
         buttons.data_button("Leech Prefix", f"userset {user_id} menu LEECH_PREFIX")
         buttons.data_button("Leech Suffix", f"userset {user_id} menu LEECH_SUFFIX")
         buttons.data_button("Leech Caption", f"userset {user_id} menu LEECH_CAPTION")
+        buttons.data_button("Caption Replace", f"userset {user_id} menu CAPTION_WORD_REPLACE")
         buttons.data_button("Thumbnail Layout", f"userset {user_id} menu THUMBNAIL_LAYOUT")
         buttons.data_button(
             state_label("Send As Document", enabled("AS_DOCUMENT")),
@@ -750,6 +778,7 @@ Leech Destination: <code>{escape(str(leech_dest))}</code>
 Leech Prefix: <code>{escape(lprefix)}</code>
 Leech Suffix: <code>{escape(lsuffix)}</code>
 Leech Caption: <code>{escape(lcap)}</code>
+Caption Replace: <code>{escape(str(caption_word_replace))}</code>
 Caption Font: <b>{font_label}</b>
 Complete Msg: <b>{complete_msg}</b>
 Sequential Leech: <b>{sequential_leech}</b>
@@ -1140,6 +1169,7 @@ Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
         buttons.data_button("Gofile Tools", f"userset {user_id} gofile")
         buttons.data_button("BuzzHeavier Tools", f"userset {user_id} buzzheavier")
         buttons.data_button("PixelDrain Tools", f"userset {user_id} pixeldrain")
+        buttons.data_button("VikingFile Tools", f"userset {user_id} vikingfile")
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button("Close", f"userset {user_id} close", "footer")
         btns = buttons.build_menu(1)
@@ -1167,6 +1197,33 @@ Intro Ranges -> <code>{escape(str(intro_ranges))}</code>
 ┟ <b>Name</b> → {user_name}
 ┃
 ┖ <b>PixelDrain Key</b> → <code>{pdtoken}</code>"""
+
+    elif stype == "vikingfile":
+        buttons.data_button(
+            "VikingFile User Hash", f"userset {user_id} menu VIKINGFILE_HASH"
+        )
+        buttons.data_button(
+            "VikingFile Folder", f"userset {user_id} menu VIKINGFILE_FOLDER"
+        )
+        buttons.data_button("Back", f"userset {user_id} back uphoster", "footer")
+        buttons.data_button("Close", f"userset {user_id} close", "footer")
+        btns = buttons.build_menu(1)
+
+        vfhash = (
+            user_dict.get("VIKINGFILE_HASH")
+            or Config.VIKINGFILE_HASH
+            or "Anonymous"
+        )
+        vffolder = (
+            user_dict.get("VIKINGFILE_FOLDER")
+            or Config.VIKINGFILE_FOLDER
+            or "Root"
+        )
+        text = f"""⌬ <b>VikingFile Settings :</b>
+┟ <b>Name</b> → {user_name}
+┃
+┠ <b>User Hash</b> → <code>{vfhash}</code>
+┖ <b>Folder</b> → <code>{vffolder}</code>"""
 
     elif stype == "buzzheavier":
         buttons.data_button(
@@ -2248,6 +2305,7 @@ async def edit_user_settings(client, query):
         "gofile",
         "buzzheavier",
         "pixeldrain",
+        "vikingfile",
         "ffset",
         "advanced",
         "post",
@@ -2366,7 +2424,7 @@ async def edit_user_settings(client, query):
             )
 
         buttons = ButtonMaker()
-        for service in ["gofile", "buzzheavier", "pixeldrain"]:
+        for service in ["gofile", "buzzheavier", "pixeldrain", "vikingfile"]:
             state = "✓" if service in selected_services else ""
             buttons.data_button(
                 f"{service.capitalize()} {state}",

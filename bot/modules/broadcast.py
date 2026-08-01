@@ -4,6 +4,7 @@ from secrets import token_hex
 
 from pyrogram.errors import FloodWait, InputUserDeactivated, UserIsBlocked
 
+from .. import LOGGER
 from ..core.config_manager import Config
 from ..core.tg_client import TgClient
 from ..helper.ext_utils.bot_utils import new_task
@@ -15,6 +16,22 @@ from ..helper.telegram_helper.message_utils import (
 )
 
 bc_cache = {}
+
+
+async def _pin_broadcast(message, quietly):
+    try:
+        await message.pin(disable_notification=quietly)
+        return True
+    except FloodWait as error:
+        await sleep(error.value)
+        try:
+            await message.pin(disable_notification=quietly)
+            return True
+        except Exception as pin_error:
+            LOGGER.warning(f"Broadcast pin failed in {message.chat.id}: {pin_error}")
+    except Exception as error:
+        LOGGER.warning(f"Broadcast pin failed in {message.chat.id}: {error}")
+    return False
 
 
 async def delete_broadcast(bc_id, message):
@@ -160,8 +177,9 @@ async def broadcast(_, message):
     updater = time()
     bc_hash, bc_msgs = token_hex(5), []
     pls_wait = await send_message(message, status.format(t=0, s=0, b=0, d=0, u=0))
-    t, s, b, d, u = 0, 0, 0, 0, 0
+    t, s, b, d, u, pin_failed = 0, 0, 0, 0, 0, 0
     for uid in await database.get_pm_uids():
+        bc_msg = None
         try:
             bc_msg = (
                 await rply.forward(uid, disable_notification=quietly)
@@ -184,16 +202,22 @@ async def broadcast(_, message):
             await database.rm_pm_user(uid)
             d += 1
         except Exception as e:
-            print(f"Error broadcasting message to user {uid}: {e}")
+            LOGGER.warning(f"Error broadcasting message to user {uid}: {e}")
             u += 1
         if bc_msg:
             bc_msgs.append((uid, bc_msg.id))
+            if not await _pin_broadcast(bc_msg, quietly):
+                pin_failed += 1
         t += 1
         if (time() - updater) > 10:
-            await edit_message(pls_wait, status.format(t=t, s=s, b=b, d=d, u=u))
+            await edit_message(
+                pls_wait,
+                status.format(t=t, s=s, b=b, d=d, u=u)
+                + f"\n<b>Pin Failed:</b> <code>{pin_failed}</code>",
+            )
             updater = time()
     bc_cache[bc_hash] = bc_msgs
     await edit_message(
         pls_wait,
-        f"{status.format(t=t, s=s, b=b, d=d, u=u)}\n\n<b>Elapsed Time:</b> <code>{get_readable_time(time() - start_time)}</code>\n<b>Broadcast ID:</b> <code>{bc_hash}</code>",
+        f"{status.format(t=t, s=s, b=b, d=d, u=u)}\n<b>Pin Failed:</b> <code>{pin_failed}</code>\n\n<b>Elapsed Time:</b> <code>{get_readable_time(time() - start_time)}</code>\n<b>Broadcast ID:</b> <code>{bc_hash}</code>",
     )

@@ -105,7 +105,7 @@ class VikingFileUpload(BaseUpload):
 
     async def _validate_token(self):
         if not self.token:
-            LOGGER.warning("VikingFile User Hash not set — uploading anonymously.")
+            LOGGER.warning("VikingFile User Hash not set; uploading anonymously.")
 
     async def _upload_process(self):
         if await aiopath.isfile(self._path):

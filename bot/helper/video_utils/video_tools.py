@@ -437,7 +437,11 @@ async def video_tools_text_collector(_, message):
         value = value[:80] or item.get("title") or "External Audio"
     item[field] = value
     state["preview_stale"] = True
-    await send_message(message, f"Updated <b>{field.replace('_', ' ').title()}</b>: <code>{value}</code>")
+    vt_msg = getattr(session.get("listener"), "_vt_msg", None)
+    if vt_msg:
+        from ...modules.video_tool_ui import render_merge_audio_config_message
+
+        await render_merge_audio_config_message(vt_msg, state, index)
 
 
 def finish_merge_track_intake(state, event):
@@ -466,7 +470,7 @@ async def generate_merge_preview(state):
         from ..ext_utils.media_utils import get_media_info
 
         duration = float((await get_media_info(input_path))[0] or 0)
-        preview_duration = min(60, max(1, int(duration or 60)))
+        preview_duration = min(120, max(1, int(duration or 120)))
         start = max(0, (duration - preview_duration) / 2) if duration else 0
         cmd = [
             BinConfig.FFMPEG_NAME, "-hide_banner", "-loglevel", "error", "-y",
@@ -481,9 +485,21 @@ async def generate_merge_preview(state):
             if item.get("delay_ms"):
                 cmd.extend(["-itsoffset", f"{int(item['delay_ms']) / 1000:.3f}"])
             cmd.extend(["-i", item["path"]])
-        cmd.extend(["-map", "0:v:0", "-map", "0:a:0?"])
+        cmd.extend(["-map", "0:v:0"])
         for input_index, item in enumerate(selected, start=1):
             cmd.extend(["-map", f"{input_index}:a:{int(item.get('stream_index', 0))}?"])
+        cmd.extend(["-map", "0:a?"])
+        for output_index, item in enumerate(selected):
+            cmd.extend(
+                [
+                    f"-metadata:s:a:{output_index}",
+                    f"language={_normalize_language(item.get('language', 'und'))}",
+                    f"-metadata:s:a:{output_index}",
+                    f"title={str(item.get('title') or item.get('name') or 'External Audio')[:80]}",
+                ]
+            )
+        if selected:
+            cmd.extend(["-disposition:a", "0", "-disposition:a:0", "default"])
         cmd.extend(
             [
                 "-t", str(preview_duration), "-vf",
@@ -502,7 +518,7 @@ async def generate_merge_preview(state):
                 await previous.delete()
         state["preview_message"] = await listener.message.reply_video(
             preview_path,
-            caption="<b>60-second middle preview</b>",
+            caption="<b>120-second middle preview</b>",
             supports_streaming=True,
         )
         state["preview_path"] = preview_path
@@ -537,19 +553,30 @@ async def video_tools_media_collector(client, message):
             _external_audio_item(len(state["external_audio"]), ospath.basename(downloaded), downloaded)
         )
         state["merge_audio"].append(len(state["external_audio"]) - 1)
+        first_audio_index = len(state["external_audio"]) - 1
     elif ext in VIDEO_EXTENSIONS:
         items = await _external_video_audio_items(downloaded, len(state["external_audio"]))
         state["external_audio"].extend(items)
         state["merge_audio"].extend(item["index"] for item in items)
+        first_audio_index = items[0]["index"] if items else None
     elif ext in SUBTITLE_EXTENSIONS:
         state["external_sub"].append(
             {"index": len(state["external_sub"]), "name": ospath.basename(downloaded), "path": downloaded}
         )
         state["merge_sub"].append(len(state["external_sub"]) - 1)
-    await send_message(
-        message,
-        f"Video Tools: received <code>{ospath.basename(downloaded)}</code>. Configure tracks, preview, then press Done.",
-    )
+        first_audio_index = None
+    state["preview_stale"] = True
+    vt_msg = getattr(session.get("listener"), "_vt_msg", None)
+    if vt_msg:
+        from ...modules.video_tool_ui import (
+            render_merge_audio_config_message,
+            render_merge_intake,
+        )
+
+        if first_audio_index is not None:
+            await render_merge_audio_config_message(vt_msg, state, first_audio_index)
+        else:
+            await render_merge_intake(vt_msg, state)
 
 
 def _target_lang(listener):
@@ -825,7 +852,7 @@ async def process_video_tool(listener, up_path):
 
     try:
         # Render the UI
-        from ...modules.video_tool_ui import render_video_tools_main
+        from ...modules.video_tool_ui import render_merge_intake, render_video_tools_main
 
         tag = getattr(listener, "tag", None) or (listener.message.from_user.mention if listener.message.from_user else "")
         vt_msg = await send_message(
@@ -833,7 +860,11 @@ async def process_video_tool(listener, up_path):
             f"{tag} ⚙️ <b>Generating Video Tools UI...</b>",
         )
         listener._vt_msg = vt_msg
-        await render_video_tools_main(vt_msg, state)
+        if getattr(listener, "manual_video_merge", False):
+            await start_merge_track_intake(vt_msg, state, done_event)
+            await render_merge_intake(vt_msg, state)
+        else:
+            await render_video_tools_main(vt_msg, state)
 
         # Wait for user to click Done/Close or timeout
         try:
@@ -1349,6 +1380,15 @@ async def _execute_vt_pipeline(listener, input_path, state):
     all_audio = {t["index"]: t for t in state["audio_tracks"]}
     all_sub = {t["index"]: t for t in state["sub_tracks"]}
 
+    # External audio is intentionally first in the output. This also makes a
+    # manually added dub the default track while retaining original audio.
+    merged_audio = []
+    for input_idx, (kind, _, item) in enumerate(extra_inputs, start=1):
+        if kind == "audio":
+            stream_index = int((item or {}).get("stream_index", 0))
+            cmd.extend(["-map", f"{input_idx}:a:{stream_index}?"])
+            merged_audio.append(item or {})
+
     # Audio tracks to keep (respecting removals, keep-only, and order)
     audio_remove = set(state.get("remove_audio", []))
     if state.get("keep_audio"):
@@ -1359,7 +1399,9 @@ async def _execute_vt_pipeline(listener, input_path, state):
         ordered = _ordered_track_indexes(
             [t for t in state["audio_tracks"] if t["index"] in audio_keep],
             state.get("audio_order_value"),
-            remove_unmatched=bool(state.get("keep_audio")),
+            # Keep filters decide which tracks survive. Ordering must never
+            # discard another selected language that is not named first.
+            remove_unmatched=False,
         )
         audio_keep = [idx for idx in ordered if idx in audio_keep]
     elif state.get("audio_order"):
@@ -1368,7 +1410,9 @@ async def _execute_vt_pipeline(listener, input_path, state):
         audio_keep = ordered
 
     for idx in audio_keep:
-        cmd.extend(["-map", f"0:a:{idx}"])
+        track = all_audio.get(idx)
+        if track:
+            cmd.extend(["-map", f"0:{track.get('stream_index', idx)}"])
 
     # Intro subtitles are mapped before existing subtitle streams so they open first.
     intro_sub_count = 0
@@ -1396,15 +1440,12 @@ async def _execute_vt_pipeline(listener, input_path, state):
         sub_keep = ordered
 
     for idx in sub_keep:
-        cmd.extend(["-map", f"0:s:{idx}"])
+        track = all_sub.get(idx)
+        if track:
+            cmd.extend(["-map", f"0:{track.get('stream_index', idx)}"])
 
-    merged_audio = []
     for input_idx, (kind, _, item) in enumerate(extra_inputs, start=1):
-        if kind == "audio":
-            stream_index = int((item or {}).get("stream_index", 0))
-            cmd.extend(["-map", f"{input_idx}:a:{stream_index}?"])
-            merged_audio.append(item or {})
-        elif kind == "sub":
+        if kind == "sub":
             cmd.extend(["-map", f"{input_idx}:s?"])
 
     # Keep attachments and data streams
@@ -1419,12 +1460,7 @@ async def _execute_vt_pipeline(listener, input_path, state):
     cmd.extend(["-disposition:a", "0", "-disposition:s", "0"])
 
     # Set default audio
-    default_audio = state.get("default_audio")
-    if default_audio is not None and default_audio in audio_keep:
-        out_idx = audio_keep.index(default_audio)
-        cmd.extend([f"-disposition:a:{out_idx}", "default"])
-
-    for offset, item in enumerate(merged_audio, start=len(audio_keep)):
+    for offset, item in enumerate(merged_audio):
         language = _normalize_language(item.get("language", "und"))
         title = str(item.get("title") or item.get("name") or "External Audio")[:80]
         cmd.extend(
@@ -1433,6 +1469,13 @@ async def _execute_vt_pipeline(listener, input_path, state):
                 f"-metadata:s:a:{offset}", f"title={title}",
             ]
         )
+
+    default_audio = state.get("default_audio")
+    if merged_audio:
+        cmd.extend(["-disposition:a:0", "default"])
+    elif default_audio is not None and default_audio in audio_keep:
+        out_idx = audio_keep.index(default_audio)
+        cmd.extend([f"-disposition:a:{out_idx}", "default"])
 
     if intro_sub_count:
         cmd.extend(["-disposition:s:0", "default", "-metadata:s:s:0", "title=Intro"])

@@ -35,7 +35,7 @@ class BotCommands:
         "Ping": "ping",
         "Restart": ["restart", "r", "restartall"],
         "RestartSessions": ["restartses", "rses"],
-        "Broadcast": ["broadcast", "bc"],
+        "Broadcast": ["broadcast", "bc", "bordcast"],
         "Stats": ["stats", "st"],
         "Help": ["help", "h"],
         "Log": "log",

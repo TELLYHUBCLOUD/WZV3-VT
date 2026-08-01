@@ -338,6 +338,9 @@ class TaskConfig:
                             or Config.PIXELDRAIN_KEY
                         ):
                             raise ValueError("No PixelDrain Key Found!")
+                    elif service == "vikingfile":
+                        # VikingFile supports anonymous uploads when no hash is set.
+                        continue
                 self.up_dest = "Uphoster"
 
             if not self.up_dest:

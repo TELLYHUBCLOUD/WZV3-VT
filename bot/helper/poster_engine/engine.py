@@ -72,6 +72,14 @@ def _clean_search_title(filename, extracted=""):
         text = sub(r"^[^\w\[]+", " ", text)
         text = sub(r"\s+", " ", text).strip(" -_.")
         cleaned = _clean_title_from_filename(text)
+        # Folder/archive names often end at a standalone season tag (S01).
+        # It is useful template metadata, but poisons provider title searches.
+        cleaned = sub(
+            r"(?i)\b(?:S(?:eason)?\s*0*\d{1,2})\b",
+            " ",
+            cleaned,
+        )
+        cleaned = sub(r"\s+", " ", cleaned).strip(" -_.")
         if len(findall(r"[A-Za-z0-9]", cleaned)) >= 2:
             return cleaned
     return _clean_title_from_filename(filename)
@@ -494,7 +502,10 @@ async def _metadata(
         provider = await _anime_search(title)
 
     tv_hint = bool(
-        search(r"(?i)(?:\bS\d{1,2}\s*E\d{1,4}\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)", seed)
+        search(
+            r"(?i)(?:\bS\d{1,2}(?:\s*E\d{1,4})?\b|\bseason\s*\d+\b|\bepisode\s*\d+\b)",
+            seed,
+        )
     )
     data = {
         "provider": "",

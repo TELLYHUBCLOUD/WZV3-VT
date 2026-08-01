@@ -102,6 +102,20 @@ async def _first_video_name(path):
     return ""
 
 
+async def _first_video_path(path):
+    if await aiopath.isfile(path):
+        if ospath.splitext(path)[1].lower() in _VIDEO_EXTENSIONS:
+            return path
+        return ""
+    if not await aiopath.isdir(path):
+        return ""
+    for dirpath, _, names in await sync_to_async(walk, path):
+        for name in sorted(names, key=str.lower):
+            if ospath.splitext(name)[1].lower() in _VIDEO_EXTENSIONS:
+                return ospath.join(dirpath, name)
+    return ""
+
+
 class TaskListener(TaskConfig):
     def __init__(self):
         super().__init__()
@@ -503,7 +517,9 @@ class TaskListener(TaskConfig):
                     text = str(value).strip().lower()
                     return text in {"1", "true", "yes", "y", "on"} if text else default
 
-                poster_path = up_path if self.is_file else ""
+                # Folder tasks still need a real media file for stream metadata
+                # (languages, audio codec/channels, duration and resolution).
+                poster_path = await _first_video_path(up_path)
                 poster_payload = await generate_task_poster(
                     self.name,
                     poster_path,

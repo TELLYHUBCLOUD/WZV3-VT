@@ -1,4 +1,5 @@
 from .engine import (
+    POSTER_TEMPLATE_COUNT,
     build_post_caption,
     generate_task_poster,
     is_auto_poster_enabled,
@@ -7,6 +8,7 @@ from .engine import (
 )
 
 __all__ = [
+    "POSTER_TEMPLATE_COUNT",
     "build_post_caption",
     "generate_task_poster",
     "is_auto_poster_enabled",

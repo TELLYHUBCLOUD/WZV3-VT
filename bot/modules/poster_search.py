@@ -2,7 +2,11 @@ from html import escape
 
 from .. import LOGGER, user_data
 from ..helper.ext_utils.bot_utils import new_task
-from ..helper.poster_engine import render_poster_option, search_poster_metadata
+from ..helper.poster_engine import (
+    POSTER_TEMPLATE_COUNT,
+    render_poster_option,
+    search_poster_metadata,
+)
 from ..helper.telegram_helper.button_build import ButtonMaker
 from ..helper.telegram_helper.message_utils import (
     delete_message,
@@ -61,7 +65,7 @@ async def poster_search(_, message):
             return
         POSTER_SEARCH_CACHE[(message.from_user.id, wait.id)] = metadata
         buttons = ButtonMaker()
-        for i in range(1, 9):
+        for i in range(1, POSTER_TEMPLATE_COUNT + 1):
             buttons.data_button(f"Style {i}", f"psel {message.from_user.id} {wait.id} {i}")
         buttons.data_button("Close", f"psel {message.from_user.id} {wait.id} close", "footer")
         preview = await render_poster_option(metadata, message.from_user.id, user_dict, "1")

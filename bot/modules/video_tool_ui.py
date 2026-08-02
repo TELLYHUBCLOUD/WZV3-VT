@@ -81,10 +81,9 @@ async def render_merge_intake(vt_msg, state):
         "",
         "Send audio, subtitle, or video files to this chat.",
         "Muxing starts only after Done.",
+        "Selected new audio is placed first and used by Preview.",
         f"Audio: <b>{len(audio)}</b> | Subtitles: <b>{len(subtitles)}</b>",
     ]
-    if state.get("merge_idle"):
-        lines.append("\nIntake is idle; new files are still accepted.")
     rows = []
     for item in audio:
         selected = item["index"] in state.get("merge_audio", [])
@@ -99,6 +98,13 @@ async def render_merge_intake(vt_msg, state):
         )
     rows.extend(
         [
+            [
+                InlineKeyboardButton(
+                    "🔴 Remove Current Audio" if state.get("remove_original_audio") else "🟢 Keep Current Audio",
+                    callback_data=f"vt_mergeoriginal_{task_id}",
+                    style=_btn_style(ButtonStyle.DANGER if state.get("remove_original_audio") else ButtonStyle.SUCCESS),
+                )
+            ],
             [InlineKeyboardButton("Preview 120s", callback_data=f"vt_preview_{task_id}")],
             [
                 InlineKeyboardButton("🟢 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
@@ -148,7 +154,18 @@ async def render_merge_audio_config_message(message, state, index):
                 style=_state_style(selected) if selected else _btn_style(ButtonStyle.DANGER),
             )
         ],
-        [InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}")],
+        [
+            InlineKeyboardButton(
+                "🔴 Remove Current Audio" if state.get("remove_original_audio") else "🟢 Keep Current Audio",
+                callback_data=f"vt_mergeoriginal_{task_id}",
+                style=_btn_style(ButtonStyle.DANGER if state.get("remove_original_audio") else ButtonStyle.SUCCESS),
+            )
+        ],
+        [InlineKeyboardButton("Preview 120s", callback_data=f"vt_preview_{task_id}")],
+        [
+            InlineKeyboardButton("🟢 Done", callback_data=f"vt_done_{task_id}", style=_btn_style(ButtonStyle.SUCCESS)),
+            InlineKeyboardButton("Back", callback_data=f"vt_mergeback_{task_id}"),
+        ],
     ]
     await message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows))
 
@@ -420,7 +437,7 @@ async def video_tools_callback(_, query):
             if _has_extract_selection(state):
                 await query.answer("Extract Stream cannot be combined with Merge Tracks.", show_alert=True)
                 return
-            await start_merge_track_intake(query.message, state, event)
+            await start_merge_track_intake(query.message, state)
             await render_merge_intake(query.message, state)
             return
 
@@ -443,6 +460,12 @@ async def video_tools_callback(_, query):
             await render_merge_audio_config(query, state, index)
             return
 
+        if action == "mergeoriginal":
+            state["remove_original_audio"] = not state.get("remove_original_audio", False)
+            state["preview_stale"] = True
+            await render_merge_intake(query.message, state)
+            return
+
         if action == "mergefield":
             index = int(parts[-2])
             field = "_".join(parts[2:-2])
@@ -462,7 +485,11 @@ async def video_tools_callback(_, query):
             await query.message.edit_text("<b>Generating the 120-second middle preview...</b>")
             try:
                 await generate_merge_preview(state)
-                await render_merge_intake(query.message, state)
+                selected = state.get("merge_audio", [])
+                if selected:
+                    await render_merge_audio_config_message(query.message, state, selected[0])
+                else:
+                    await render_merge_intake(query.message, state)
             except Exception as error:
                 await query.message.edit_text(
                     f"<b>Preview failed:</b> <code>{str(error)[:400]}</code>",

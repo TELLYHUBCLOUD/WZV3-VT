@@ -1,7 +1,7 @@
 import json
 import re
 from contextlib import suppress
-from asyncio import Event, create_subprocess_exec, create_task, sleep, wait_for
+from asyncio import Event, create_subprocess_exec, wait_for
 from asyncio.subprocess import PIPE
 from os import path as ospath, walk
 from time import time
@@ -32,14 +32,6 @@ UI_TIMEOUT = 900  # 15 minutes
 
 # Global dict to hold active video tool sessions: {task_id: event}
 _active_vt_sessions = {}
-
-
-def _merge_track_timeout():
-    try:
-        timeout = int(getattr(Config, "VT_MERGE_TRACK_TIMEOUT", 60) or 60)
-    except (TypeError, ValueError):
-        timeout = 60
-    return max(10, timeout)
 
 
 def _reply_timeout():
@@ -209,8 +201,7 @@ def _base_state(task_id, filename, audio_tracks, sub_tracks, input_path=""):
         "intro_text_available": False,
         "external_dir": "",
         "merge_intake": False,
-        "merge_last_time": 0,
-        "merge_idle": False,
+        "remove_original_audio": False,
         "awaiting_input": None,
         "preview_path": "",
         "preview_stale": True,
@@ -283,35 +274,14 @@ def _select_all_external_tracks(state):
     state["merge_sub"] = [item["index"] for item in state.get("external_sub", [])]
 
 
-async def start_merge_track_intake(vt_msg, state, event):
+async def start_merge_track_intake(vt_msg, state):
     await _ensure_external_dir(state)
     state["merge_intake"] = True
-    state["merge_last_time"] = time()
-    state["merge_idle"] = False
-    timeout = _merge_track_timeout()
     await vt_msg.edit(
         "<b>Merge Tracks Intake</b>\n\n"
-        f"Send audio, subtitle, or video files now. Intake becomes idle after {timeout} "
-        "seconds, but muxing starts only when you press Done."
+        "Send audio, subtitle, or video files now. Configure the new audio, "
+        "generate a 120-second preview, then press Done to mux."
     )
-    create_task(_merge_intake_timer(vt_msg, state, event))
-
-
-async def _merge_intake_timer(vt_msg, state, event):
-    while state.get("merge_intake") and not state.get("completed"):
-        remaining = _merge_track_timeout() - int(time() - state.get("merge_last_time", time()))
-        if remaining <= 0:
-            break
-        await sleep(min(remaining, 3))
-    if state.get("completed"):
-        return
-    state["merge_idle"] = True
-    try:
-        from ...modules.video_tool_ui import render_merge_intake
-
-        await render_merge_intake(vt_msg, state)
-    except Exception:
-        pass
 
 
 def _external_audio_item(index, name, path, stream_index=0, language="und", title=""):
@@ -447,8 +417,9 @@ async def video_tools_text_collector(_, message):
 def finish_merge_track_intake(state, event):
     if not state.get("merge_audio") and not state.get("merge_sub"):
         raise ValueError("Send and select at least one audio or subtitle track first.")
+    if state.get("remove_original_audio") and not state.get("merge_audio"):
+        raise ValueError("Select at least one new audio track before removing current audio.")
     state["merge_intake"] = False
-    state["merge_idle"] = False
     state["completed"] = True
     event.set()
 
@@ -464,7 +435,7 @@ async def generate_merge_preview(state):
 
     state["busy"] = True
     preview_path = ospath.join(
-        ospath.dirname(input_path), f"vt_preview_{state['task_id']}.mp4"
+        ospath.dirname(input_path), f"vt_preview_{state['task_id']}.mkv"
     )
     try:
         from ..ext_utils.media_utils import get_media_info
@@ -481,14 +452,18 @@ async def generate_merge_preview(state):
             for item in state.get("external_audio", [])
             if item["index"] in state.get("merge_audio", [])
         ]
+        if not selected:
+            raise ValueError("Send and select a new audio track before creating a preview.")
         for item in selected:
             if item.get("delay_ms"):
                 cmd.extend(["-itsoffset", f"{int(item['delay_ms']) / 1000:.3f}"])
-            cmd.extend(["-i", item["path"]])
+            cmd.extend(["-ss", f"{start:.3f}", "-i", item["path"]])
+        cmd.extend(["-copyts", "-start_at_zero"])
         cmd.extend(["-map", "0:v:0"])
         for input_index, item in enumerate(selected, start=1):
             cmd.extend(["-map", f"{input_index}:a:{int(item.get('stream_index', 0))}?"])
-        cmd.extend(["-map", "0:a?"])
+        if not state.get("remove_original_audio"):
+            cmd.extend(["-map", "0:a?"])
         for output_index, item in enumerate(selected):
             cmd.extend(
                 [
@@ -502,10 +477,9 @@ async def generate_merge_preview(state):
             cmd.extend(["-disposition:a", "0", "-disposition:a:0", "default"])
         cmd.extend(
             [
-                "-t", str(preview_duration), "-vf",
-                "scale=-2:720:force_original_aspect_ratio=decrease",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "25",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                "-t", str(preview_duration),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
                 preview_path,
             ]
         )
@@ -518,8 +492,8 @@ async def generate_merge_preview(state):
                 await previous.delete()
         state["preview_message"] = await listener.message.reply_video(
             preview_path,
-            caption="<b>120-second middle preview</b>",
-            supports_streaming=True,
+            caption="<b>120-second middle preview (stream copy)</b>",
+            supports_streaming=False,
         )
         state["preview_path"] = preview_path
         state["preview_stale"] = False
@@ -547,7 +521,6 @@ async def video_tools_media_collector(client, message):
     if not downloaded:
         await send_message(message, "Video Tools: failed to download merge-track file.")
         return
-    state["merge_last_time"] = time()
     if ext in AUDIO_EXTENSIONS:
         state["external_audio"].append(
             _external_audio_item(len(state["external_audio"]), ospath.basename(downloaded), downloaded)
@@ -861,7 +834,7 @@ async def process_video_tool(listener, up_path):
         )
         listener._vt_msg = vt_msg
         if getattr(listener, "manual_video_merge", False):
-            await start_merge_track_intake(vt_msg, state, done_event)
+            await start_merge_track_intake(vt_msg, state)
             await render_merge_intake(vt_msg, state)
         else:
             await render_video_tools_main(vt_msg, state)
@@ -1119,6 +1092,7 @@ def _clone_state_for_path(source, filename, audio_tracks, sub_tracks, input_path
         state[key] = [idx for idx in source.get(key, []) if idx < sub_len]
     state["merge_audio"] = list(source.get("merge_audio", []))
     state["merge_sub"] = list(source.get("merge_sub", []))
+    state["remove_original_audio"] = bool(source.get("remove_original_audio"))
     state["default_audio"] = (
         source.get("default_audio")
         if source.get("default_audio") is not None and source.get("default_audio") < audio_len
@@ -1261,6 +1235,7 @@ async def _execute_vt_pipeline(listener, input_path, state):
     await _refresh_external_tracks(state, input_path)
     has_removals = (
         state.get("remove_audio")
+        or state.get("remove_original_audio")
         or state.get("remove_sub")
         or state.get("keep_audio")
         or state.get("keep_sub")
@@ -1391,7 +1366,9 @@ async def _execute_vt_pipeline(listener, input_path, state):
 
     # Audio tracks to keep (respecting removals, keep-only, and order)
     audio_remove = set(state.get("remove_audio", []))
-    if state.get("keep_audio"):
+    if state.get("remove_original_audio"):
+        audio_keep = []
+    elif state.get("keep_audio"):
         audio_keep = [idx for idx in state["keep_audio"] if idx not in audio_remove]
     else:
         audio_keep = [t["index"] for t in state["audio_tracks"] if t["index"] not in audio_remove]
